@@ -1,0 +1,333 @@
+Source: https://drive.google.com/file/d/1iepVOIiSqV4DFtMhH8AxCQgJWOuQsTnP/view
+
+● SCF BUILD AWARD · INTEGRATION TRACK
+EvidenceData Room
+Conﬁdential · Prepared for the SCF Review Panel
+FIRST FRENCH MICA-REGULATED
+DEFI YIELD PRODUCT ON STELLAR
+DATE
+JUNE 2026
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+00 Quick Overview
+ForYield is building the first French MiCA-regulated DeFi yield product on Stellar. We filed our PSCA
+dossier with the AMF in April 2026, with agrément targeted for October 2026, and an EP simplifié
+(simplified Payment Institution) licence filed in parallel with the ACPR a dual-licence positioning
+currently unique in France. Today the product runs on a Base L2 prototype with roughly €7-8M AUM
+across 50 high-net-worth clients in a pre-agrément pilot. This grant funds the build of the regulated
+production rail on Stellar, which we launch alongside our PSCA agrément. The Soroban YieldVault
+is already deployed, tested and operational on Stellar testnet.
+Key links
+Live company site https://www.for-yield.com
+Live staging platform (pilot) foryield-frontend-staging.osc-fr1.scalingo.io (login-gated; demo
+accounts shared on request)
+Stellar testnet demo (vault) https://vault.for-yield.com
+GitHub repository (open-source,
+MIT)
+github.com/Foryield/soroban-yield-vault
+Deployed YieldVault contract
+(testnet)
+stellar.expert/explorer/testnet/contract/CCKW7NFKDCOTOVUODLJ6K734ZEYT4TZL
+QGLIVFZZR6DLUHO6UOTENWQ6
+€7-8M
+AUM in pre-agrément pilot
+50
+High-net-worth clients
+LIVE
+Soroban YieldVault on testnet
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+01 Stellar Integration Plan
+1.1 Integration Architecture
+ForYield integrates seven building blocks from the official SCF Integration List. Each one removes a
+real barrier to bringing regulated European capital onto Soroban.
+Technical Architecture Doc github.com/Foryield/soroban-yield-vault (architecture, contract interface,
+demo walkthrough). Provided alongside this document.
+DeFindex Yield infrastructure layer and allocator routing. The vault allocates capital
+across whitelisted Soroban yield strategies via DeFindex rather than
+building strategy routing from scratch. (Tranche 2.)
+Blend v2 Soroban lending primitive. The primary yield venue for stablecoin supply
+positions, accessed through the DeFindex allocator.
+Aquarius AMM and liquidity layer (~$40M TVL). Provides LP yield strategies and
+swap liquidity for vault rebalancing.
+Soroswap Soroban-native DEX aggregator. Powers client-facing crypto-to-crypto
+exchange and internal rebalancing across the full Stellar DEX stack
+(Phoenix, Aquarius, SDEX).
+Allbridge Cross-chain bridge. Lets EVM and Solana users fund the vault on Stellar
+without manual bridging secondary onboarding path; primary
+onboarding is EUR via the regulated fiat ramp.
+DFNS Wallets-as-a-Service. Provisions Soroban-compatible embedded wallets
+from an email login for non-crypto-native patrimonial clients. DFNS
+integration.
+Stellar Wallets Kit Wallet connection layer for crypto-native users (Freighter, Albedo, xBull).
+Live in the testnet vault UI today.
+Supporting institutional infrastructure (not Integration Track scope, not funded by this grant): Fireblocks MPC
+custody for segregated AUM (required under MiCA), Elliptic or Notabene for Travel Rule and KYT screening, and
+Certora for the Soroban smart contract audit (covered by the Stellar LaunchKit audit credit at Tranche 2).
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+1.2 Live Deployment Proof (Technical Readiness)
+We have gone beyond a plan. The Soroban YieldVault is deployed, tested and operational on
+Stellar testnet, driven by a live web app at vault.for-yield.com that signs real transactions with a
+Stellar wallet. Deposit, withdrawal and the admin emergency pause all work on-chain. Every id and
+transaction below is verifiable on Stellar Expert.
+YieldVault contract (testnet) CCKW7NFKDCOTOVUODLJ6K734ZEYT4TZLQGLIVFZZR6DLUHO6UOTENWQ6 view
+Deposit asset native XLM (SAC) CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+Public demo wallet GB73BVQU3QPX44S7MSHULQLWHKTUC3GZBOEW4IUXHQZRAPYBBUAWCH3G
+Real deposit tx (1 XLM, shares 1:1) cb2543…31f6a5
+Live web demo https://vault.for-yield.com
+Source (Rust contract + Next.js
+web)
+github.com/Foryield/soroban-yield-vault
+Scope is deliberately the Tranche 1 MVP: deposit, proportional share minting (1:1 until a yield strategy is wired),
+withdrawal and an admin pause. Each deposit and withdrawal emits a structured Soroban event the basis for the
+AMF-compliant audit trail targeted in production. The demo uses native XLM so any Friendbot-funded account can
+deposit with no faucet; the contract is asset-agnostic, so a USDC or EURC StellarAssetContract plugs in unchanged
+at initialize.
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+1.3 Why Stellar
+First EURC and regulated settlement. Stellar is the only L1 where Visa has activated EURC
+settlement (2025). For a MiCA-regulated product denominating client positions in EUR, EURC on
+Stellar removes FX volatility and matches the AMF's expectation of regulated stablecoin rails. No
+other chain oﬀers this regulatory ﬁt for a European yield product.
+Second economics that make regulated yield viable. Soroban settles in under ﬁve seconds
+at sub-cent fees. At our ticket sizes this is the diﬀerence between a workable and an unworkable
+cost structure for a managed yield product. The same vault logic on EVM would be prohibitively
+expensive at retail scale.
+Third production-ready ecosystem. DeFindex, Soroswap, Aquarius, Blend, DFNS and Stellar
+Wallets Kit provide infrastructure that would take months to build from scratch. We focus on the
+regulated vault, compliance reporting and distribution, and leverage battle-tested Stellar
+integrations for allocation, liquidity, swaps and wallets.
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+02 Traction & Metrics
+2.1 Pilot Market Test (AUM)
+AUM under management Approximately €7-8M (≈$7.4M verified snapshot, June 2026) deployed
+during a pre-agrément market test, while ForYield completes its own
+PSCA agrément. Capital is deployed across DeFi protocol positions, so
+the figure reflects live deposited positions, not idle wallet balances.
+On-chain proof of AUM Verified via DeBank portfolio aggregation across three pilot strategy
+wallets (USD, BTC and ETH): an aggregate of approximately $7.4M of
+deposited DeFi positions (June 2026 snapshot). A block explorer reads
+the wallets as near-empty because capital is deployed into protocols;
+DeBank aggregates the live positions. Portfolio screenshots available
+under NDA / on request.
+Client profile European patrimonial savers, 45-65 years old, €500k+ net worth. Off-
+chain mandates today; crypto exposure routed through an EVM
+prototype.
+Onboarding & compliance Clients onboarded with Sumsub KYC and an AMF-style suitability
+assessment. Quarterly reporting. Performance tracked daily with high-
+water-mark fees.
+Regulatory status The pre-agrément activity was a market test. ForYield's own PSCA
+agrément (MiCA) is in final review with the AMF, targeted for launch.
+AMF-validated business plan Year 1: €25M AUM, €825k revenue, €270k net. Year 3: €100M AUM,
+€3.3M revenue, €1.03M net. Profitable from Year 1 in every stress
+scenario.
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+2.2 Distribution
+Crypto & Macro media French-language crypto and macro media run by Saturnin Paulet (co-
+founder, Director of Strategy). 40,730 active newsletter subscribers
+(CRYPTOMACRO_Actifs_ALL, June 2026), exactly the European retail-
+to-HNW crypto audience ForYield serves, available as a Day-1
+distribution channel. crypto-macro.com. Featured on BFM Business
+(Focus Entreprises).
+French CGP / CGPI / CIF
+channel
+Built since January 2026 under Cosmo Di Giuseppantonio (Head of
+Sales, ex-Uptoo). A waiting list of 48 regulated French intermediaries
+(CGP, CGPI, CIF) has signed up ahead of launch (CRM segment,
+Feb 2026), with first Letters of Intent secured. Named references
+available on request for intermediaries who consented to disclosure; the
+remainder confidential by their preference.
+EU wealthtech partnerships Active discussions with multiple EU-regulated wealthtech platforms
+(under NDA) to distribute the vault as a co-branded MiCA product.
+Names disclosed upon formal agreement.
+Founder distribution proof Quentin Hopp For Mining LTD: €10M+ revenue, 10,150+ machines,
+500+ B2B clients (2024-2025). Demonstrated ability to acquire and
+serve crypto clients at scale.
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+03 Product & Demo
+Company site https://www.for-yield.com
+Staging platform (pilot
+dashboard)
+foryield-frontend-staging.osc-fr1.scalingo.io (login-gated; demo
+accounts shared on request)
+Stellar testnet vault demo https://vault.for-yield.com connect Freighter (testnet), fund via Friendbot,
+sign a real deposit, verify on Stellar Expert.
+Source code (open-source, MIT) github.com/Foryield/soroban-yield-vault
+Demo video (elevator pitch, <3
+min)
+https://youtu.be/v2eI3zRoKs4
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+04 Team Credentials
+ForYield SAS (RCS Paris 989 493 200) is an 11-person team across regulation, on-chain execution,
+DeFi research, sales and patrimonial advisory. The team already operates a private pilot managing
+€7-8M AUM; the agrément is the regulatory upgrade to scale a validated product.
+Quentin HOPP
+Founder & CEO (Paris)
+Master Banking & Finance (KEDGE) +
+Certiﬁcation AMF + Bloomberg Market Concepts.
+Co-founder For Mining LTD €10M+ revenue,
+10,150+ machines, 500+ clients (2024-2025).
+Founder OMICRON 21 (€1.2M revenue). Ex-AXA
+Wealth Services.
+LinkedIn
+Julien DAUBERT
+Managing Director (Bordeaux)
+HEC Paris Executive. Founder/CEO 10H11 data
+science for regulated ﬁntechs and PSCA, 14
+years. Author of two reference books. Member
+G20 Young Entrepreneurs' Alliance.
+LinkedIn
+Saturnin PAULET
+Director of Strategy, Shareholder 25% (Lausanne,
+CH)
+Founder & editor of Crypto & Macro (crypto-
+macro.com), a crypto/macro media with 40,730
+active newsletter subscribers, featured on BFM
+Business. Chairs the ForYield Investment
+Committee.
+LinkedIn
+Alexandre PELLENQ
+CRCO Risk & Compliance Director (Paris)
+PSCA compliance lead under the AMF
+framework.
+LinkedIn
+Pierrick BARNES
+CTO / CISO (Bordeaux)
+Stack lead: Rails 8.1, Next.js 16, Soroban,
+Fireblocks MPC. Deployed the Soroban YieldVault
+on testnet (contract CCKW7…ENWQ6) with a live
+web demo at vault.for-yield.com.
+LinkedIn GitHub
+Ahcène BENSALAMA
+DeFi & Asset Management Expert (Paris)
+Sciences Po. Independent advisor with a network
+across XAnge and the French crypto-investment
+ecosystem. Leads DeFi strategy curation and on-
+chain risk monitoring for the YieldVault allocator.
+LinkedIn
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+Paul ROCCHI
+Supervisor of Advisory Function (Paris, joining July
+2026)
+Ph.D. Chemistry. 2+ years DeFi advisory at
+Montaigne Conseil & Patrimoine. Lecturer at Alyra
+(blockchain school) and INSEEC.
+LinkedIn
+Cosmo DI GIUSEPPANTONIO
+Head of Sales (Mulhouse)
+EM Strasbourg, ex-Uptoo. Building the French
+CGPI channel since January 2026; ﬁrst LOIs
+signed.
+LinkedIn
+Marius ORTIZ
+Front-end Developer (Bordeaux)
+Next.js client UI for the vault and client platform.
+LinkedIn GitHub
+Jules SCHILOVITZ
+Inside Sales (Grenoble)
+Grenoble Ecole de Management. Trained LCB-FT
++ Market Abuse.
+LinkedIn
+Jaïmy DOS SANTOS
+Inside Sales (Kingersheim)
+Université de Lorraine. Speaker at the I3 Belgium
+digital-asset conference. Trained LCB-FT +
+Market Abuse.
+LinkedIn
+Stellar / Soroban Readiness
+Unlike teams that are only planning a Stellar build, ForYield has already shipped one. The Soroban
+YieldVault is written in Rust against soroban-sdk, deployed on testnet, and exercised end-to-end
+(deposit, withdrawal, pause) with verifiable transactions, driven by a live Next.js web app (vault.for-
+yield.com, static export on Render). The team uses the Stellar CLI, Stellar Wallets Kit and the Soroban
+RPC, and has begun the DFNS integration for embedded wallets. Source is open-source under MIT.
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+05 Competitive Landscape
+No regulated French actor combines advice, discretionary management, custody and DeFi-native
+yield for patrimonial clients. ForYield occupies a vacant segment.
+FEATURE FORYIELD COINHOUSE /
+STACKINSAT
+SWISSBORG /
+BITPANDA
+UNREGULATED
+DEFI
+MiCA PSCA licence
+(FR)
+In ﬁnal review,
+agrément targeted
+Oct 2026
+PSAN only, no
+managed yield
+Not French-
+regulated
+None
+DeFi yield strategies Core oﬀering, on-
+chain
+Buy/sell or savings
+only
+Limited yield
+products
+Yes, but
+unregulated / DIY
+Discretionary
+mandate
+Yes, signed mandate No No No
+EUR-denominated
+(EURC)
+EURC-ﬁrst on Stellar EUR ﬁat only Multi-currency Mostly USD
+stablecoins
+On-chain settlement Soroban vault +
+audit trail
+Oﬀ-chain custody Oﬀ-chain
+custody
+On-chain, no
+compliance
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+06 Regulatory Moat & Social Proof
+6.1 Regulatory Moat
+PSCA dossier (MiCA) Filed with the AMF April 2026 25 thematic sections + DORA operational
+resilience. Agrément targeted October 2026.
+EP simplifié licence Filed in parallel with the ACPR (art. L.522-11-1 CMF). Dual-licence
+positioning unique in France.
+Cybersecurity audit ACCEIS passed March 2026, all findings remediated and counter-
+audited.
+Custody & compliance stack Dfns MPC custody, Sumsub KYC/AML, Travel Rule via Elliptic/Notabene,
+audited Soroban contracts (Certora via LaunchKit at T2).
+6.2 Social Proof & Community
+Crypto & Macro crypto-macro.com 40,730 active subscribers. Editor: Saturnin Paulet
+(saturnindevins.com). Featured on BFM Business.
+Company LinkedIn linkedin.com/company/foryield
+Founder track record For Mining LTD (€10M+ revenue, 500+ clients) and OMICRON 21
+(€1.2M revenue) demonstrated crypto execution and client acquisition.
+ForYield socials Company LinkedIn above. Broader social and newsletter presence
+launches at go-to-market; pre-agrément public communication is
+deliberately limited.
+
+
+EVIDENCE DATA ROOM · CONFIDENTIAL
+07 Supporting Documents
+Pitch deck (PDF) Provided alongside this document.
+Technical architecture & demo
+doc
+the-arch.md addresses, architecture diagram, contract interface, demo
+walkthrough. Provided alongside this document.
+Source repository github.com/Foryield/soroban-yield-vault Rust contract, Next.js web,
+README with testnet deployment.
+Application Build (SCF) Submitted via the SCF Google Sheet three tranches, $144,000.

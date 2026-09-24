@@ -1,0 +1,256 @@
+Source: https://docs.google.com/document/d/1EQa00t9Hmn3KvYZCTfonQgaTiQ5euqTi/edit?usp=sharing&ouid=102341337188527212430&rtpof=true&sd=true
+
+TroqPay Technical Architecture
+Pix-to-Stellar USDC settlement for Brazilian merchants: non-custodial wallets and DeFindex yield.
+Track Selection - SCF Integration Track 
+Prepared for Stellar Community Fund Build review. Revised 14 June 2026.
+1. Summary
+TroqPay is a payments product for Brazilian businesses, live in production today. It offers business financial intelligence through AI, collects Pix in BRL, keeps a per-merchant BRL ledger, and pays out either by Pix or to a USDT wallet through a licensed local provider.
+This grant proposal moves the actual TroqPay's liquidation path in USDT to Stellar settlement path in USDC. 
+A merchant will be able to turn Pix proceeds into native USDC on Stellar held in a wallet they control, move that USDC back to BRL (when they choose to make payments locally), and place it in a DeFindex vault. TroqPay builds and submits the transactions, records every leg, and reconciles balances. The merchant holds the signing key. 
+The regulated conversion between BRL and USDC, and the KYC/KYB that goes with it, sit with a licensed Brazilian VASP/anchor.
+2. Integration Track Fit
+TroqPay is applying under the SCF Integration Track. The project integrates existing Stellar ecosystem building blocks into a live merchant payments platform: Privy for embedded non-custodial Stellar wallets, a licensed anchor/on-off-ramp provider for BRL <-> USDC conversion, native USDC on Stellar as the digital-dollar settlement asset, and DeFindex as the DeFi yield layer.
+TroqPay will not build a new protocol or wallet from scratch. The goal is to connect existing Brazilian Pix merchant volume to Stellar rails, create new merchant-controlled Stellar wallets, increase USDC activity on Stellar, and retain idle merchant USDC inside DeFindex vaults.
+TroqPay is already live in production with Pix collection, a per-merchant BRL ledger, hosted checkout/API, and an existing stablecoin payout path. This matters for the Integration Track because the Stellar work connects an existing merchant payment flow to Stellar ecosystem building blocks, rather than starting from a standalone demo. Current product traction, merchant pipeline, and expected pilot volume are provided in the SCF application form; this technical document explains how that merchant payment flow will be connected to Stellar. 
+3. Stellar Use Case
+Pix moves BRL in seconds, but it stops at the border and at the currency. A Brazilian business that sells abroad, pays suppliers in dollars, or simply wants to hold dollars has to leave Pix for exchanges and manual transfers. USDC on Stellar removes that barrier: the merchant gets a digital-dollar balance that settles in seconds, costs a fraction of a cent to move, and stays under their own key.
+Stellar's low and predictable fees and fast finality make small, frequent settlements practical, which is how Pix merchants actually receive money. For TroqPay, this is a real change in capability: a BRL-only balance becomes one the merchant can hold in dollars, move globally, and allocate through Stellar-native DeFi without handing custody to TroqPay.
+Specific use case: native USDC on Stellar as the digital-dollar settlement and store-of-value layer for Brazilian Pix merchants, held in a wallet the merchant controls.
+Three concrete flows:
+	•	On-ramp: Pix in → USDC on Stellar. A merchant converts available BRL balance into native USDC delivered to their own Stellar wallet.
+	•	Off-ramp: USDC → BRL by Pix. The merchant signs a Stellar USDC payment to the anchor or selected on/off-ramp provider and receives BRL by Pix, running through the existing withdrawal state machine on a new USDC_STELLAR rail.
+	•	Opt-in yield: from their own wallet, the merchant signs a DeFindex deposit; vault shares accrue to the merchant; redeem returns USDC to the merchant wallet.
+For Stellar, this integration turns Brazilian Pix merchant demand into measurable network activity: new Stellar wallets, native USDC balances, on-ramp volume, mainnet transactions, and DeFindex TVL. TroqPay will make USDC on Stellar the preferred digital-dollar path for merchants and will encourage merchants to keep idle USDC on Stellar through an explicit opt-in DeFindex yield flow.
+4. The Existing System
+TroqPay runs on Next.js (App Router) for both its public API and the merchant app, with Prisma over PostgreSQL. The API uses scoped keys with strict TEST and LIVE separation, and live access is gated behind an approval step. Merchants create Pix charges through the API or a hosted checkout, with idempotency keys on every money-moving call. A licensed Brazilian Pix/BaaS provider handles collection; inbound provider webhooks are signature-verified, and outbound merchant webhooks are signed with HMAC-SHA256.
+Money is tracked in a BRL ledger that derives each merchant's available balance and position. Payouts run through a withdrawal state machine that today supports two rails, BRL by Pix and USDT to a wallet. Every payout records completion evidence: an endToEndId for Pix, a transaction hash for the USDT wallet rail.
+TroqPay already runs a stablecoin path in production. Through a licensed local VASP/OTC provider, a merchant can quote BRL into USDT, have the provider execute the trade, and receive USDT at a wallet address they own. This grant moves that story onto Stellar and onto rails the merchant controls end to end.
+The Stellar work reuses primitives that already run real money:
+	•	BRL ledger with per-merchant balance derivation as the source of truth for obligations.
+	•	Withdrawal state machine with idempotency keys and PostgreSQL advisory locks around balance reservation.
+	•	Completion evidence on every payout: endToEndId for Pix, transaction hash on-chain.
+	•	Scoped API keys with TEST/LIVE separation behind a production-access gate.
+	•	Signed inbound and outbound webhooks with target validation.
+	•	Field-level AES-256-GCM PII encryption and an append-only PII-access audit trail enforced by a database trigger.
+5. Scope Of This Grant
+In scope:
+	•	Native USDC settlement on Stellar, from a merchant's BRL balance to a wallet they control.
+	•	Non-custodial wallet onboarding through Privy, with the merchant holding the key.
+	•	A USDC-to-BRL path that pays out by Pix, running behind the existing withdrawal state machine.
+	•	Opt-in placement of USDC into a DeFindex vault from the merchant's own wallet.
+	•	Reconciliation and a proof-of-funds view that compares ledger obligations against on-chain balances.
+	•	Standalone MVP implementation with PaltaLabs (https://paltalabs.io/) to de-risk Privy wallet onboarding, DeFindex deposit/withdraw, and the selected on/off-ramp path before embedding the flow into TroqPay. 
+
+Out of scope for this grant:
+	•	Cross-chain USDC movement through Circle CCTP. Settlement is direct on Stellar.
+	•	Public proof-of-reserves. Reconciliation is an internal merchant- and ops-facing control, not a public attestation.
+	•	Custody of merchant keys. TroqPay never holds a merchant's Stellar secret.
+	•	New custody or yield smart contracts. The yield module integrates DeFindex's audited vaults rather than reimplementing them.
+	•	Legal fees, entity registration, marketing, user acquisition, token incentives, external audit costs, and commercial/licensing costs with anchor or on/off-ramp providers.
+6. Components And Responsibilities
+The Stellar integration adds a new settlement rail to the existing TroqPay system instead of replacing the current Pix, BRL ledger, or withdrawal primitives. Pix collection remains local; regulated BRL-to-USDC conversion sits with the licensed partner; Stellar becomes the native USDC settlement layer; Privy provides non-custodial wallet onboarding; and DeFindex is an merchant-signed vault path. TroqPay coordinates API state, ledger entries, transaction construction, evidence collection, and reconciliation, but the merchant signs wallet and vault transactions.
+Figure 1. Component architecture
+
+Figure 2. Pix-to-Stellar settlement and reconciliation flow
+The acceptance evidence for each tranche maps back to this architecture: wallet creation and transaction signing, ledger state transitions, Stellar testnet/mainnet transaction hashes, partner references, reconciliation reports, and dashboard walkthroughs.
+
+6.1 Components And Responsibilities
+	•	TroqPay API (execution plane): adds the USDC_STELLAR settlement rail, builds and submits Stellar transactions, and stores settlement and reconciliation records.
+	•	TroqPay merchant app (control plane): wallet onboarding, settlement requests, balances, the proof-of-funds view, and custody and risk copy.
+	•	Privy: authentication and an embedded, non-custodial Stellar wallet whose Ed25519 key the merchant controls.
+	•	Licensed Brazilian VASP/anchor: the regulated BRL-to-USDC conversion and the KYC/KYB that goes with it, using Stellar SEP flows where the partner supports them.
+	•	Stellar network: settlement of the canonical USDC asset issued by Circle, with transaction submission and balance reads through Horizon and RPC.
+	•	DeFindex: SDK and audited vault contracts for the yield module.
+	•	PostgreSQL ledger: the existing BRL ledger, extended with Stellar settlement and vault-position records, still the source of truth for obligations.
+6.2 Technical Integration Explanation
+This section describes the productized TroqPay integration that starts after the standalone Tranche #1 MVP with PaltaLabs. Tranche #1 de-risks the external flow outside the TroqPay production app: Privy wallet onboarding, USDC balance experience, Alfred or the selected provider on/off-ramp, and DeFindex deposit/withdraw. From Tranche #2 onward, TroqPay embeds the validated flow into its merchant app, API, ledger, and withdrawal infrastructure.
+The integration moves TroqPay’s current stablecoin payout path from USDT wallet payouts to native USDC on Stellar, delivered to merchant-controlled wallets created or connected through Privy. This grant replaces the current manual/provider-mediated USDT payout flow with a fully integrated Stellar-based USDC settlement flow, while preserving the existing Pix collection, BRL ledger, BRL Pix payout path, and core withdrawal lifecycle primitives.
+The key engineering principle is reuse. TroqPay already has a crypto wallet payout rail with on-chain transaction-hash evidence. The new USDC_STELLAR rail follows the same withdrawal lifecycle pattern: balance reservation, provider execution, settlement evidence, status transitions, and reconciliation. The difference is that, instead of a provider-mediated USDT payout to an external wallet address, the new rail instructs the regulated on/off-ramp provider to convert BRL into native USDC on Stellar and deliver it to the merchant’s Privy-connected Stellar wallet. TroqPay does not perform the regulated conversion or custody the funds; it coordinates the request, records provider and on-chain evidence, and reconciles the result against the merchant ledger.
+How each Stellar/Soroban component is wired:
+Rail. Add USDC_STELLAR to executionWithdrawalRails and update the relevant withdrawal decision points in lib/withdrawals/service.ts. These include settlement evidence, manual fallback, quote, validation, destination handling, processing handoff guards, and exhaustiveness checks.
+Provider dispatch by rail. The current payout provider integration is coupled directly to the withdrawal service. This grant introduces provider dispatch by rail, allowing USDC_STELLAR to use Alfred or the selected on/off-ramp provider through the existing PayoutsProviderPort interface. The provider is responsible for the regulated BRL ↔ USDC conversion and for delivering native USDC on Stellar to the merchant wallet.
+Wallet onboarding. Privy is the required wallet layer for the USDC_STELLAR flow. Merchants do not provide arbitrary external wallet addresses for this rail. Each approved merchant receives a merchant-controlled Stellar wallet through Privy, and TroqPay stores that address as the merchant’s canonical USDC_STELLAR destination. TroqPay runs an idempotent account setup process tied to the merchant account, Stellar address, and network: it verifies account activation, verifies the USDC trustline, and completes any required setup before settlement is enabled. Any XLM reserve requirement needed for account activation or trustline setup is handled by the infrastructure flow, so the merchant does not need to acquire or manage XLM manually. 
+Deterministic idempotency. The provider call uses a deterministic external identifier derived from the withdrawal ID. This prevents retries from creating duplicate provider requests or duplicate on-chain sends. The implementation follows the same replay-safe idempotency pattern used in the existing payout infrastructure.
+Stellar transaction confirmation watcher. TroqPay adds a watcher that reads Horizon/RPC to confirm transaction finality and attach the Stellar transaction hash as settlement evidence. This mirrors the existing crypto payout pattern where an on-chain transaction hash is stored as completion evidence.
+DeFindex integration through Soroban. TroqPay integrates DeFindex through @defindex/sdk. The app builds the depositToVault and withdraw/redeem invocation, the merchant signs the Soroban transaction from their own wallet, and TroqPay submits the signed transaction and records the result. TroqPay does not create new vault contracts and does not custody funds; it integrates DeFindex’s existing vault infrastructure.
+Persistence. The integration adds new records through dated, idempotent database rollouts. The main additions are:
+	•	settlement records linking a BRL debit to a USDC credit on Stellar, including asset, amount, wallet address, transaction hash, provider reference, status, and reconciliation state;
+	•	a wallet registry mapping merchant accounts to Stellar addresses, wallet provider, custody mode, network, and wallet status;
+	•	vault-position records storing vault identifier, share balance, last-read USDC value, APY where available, and timestamp;
+	•	stellarWalletAddress or equivalent destination metadata in merchant payout settings.
+On-chain reconciliation. The current ledger reconciliation validates BRL ledger invariants. This grant adds a new on-chain reconciliation layer that compares TroqPay ledger obligations against Stellar wallet balances and DeFindex vault positions. This reconciliation runs on a schedule, flags matched and unmatched items, and provides the proof-of-funds and reconciliation evidence required for testnet and mainnet review.
+Operational monitoring. Before any mainnet funds move, TroqPay adds operational monitoring around the USDC_STELLAR rail. Each settlement will have a traceable operational record containing the withdrawal ID, merchant ID, provider reference, provider status, Stellar transaction hash, transaction confirmation status, ledger movement, reconciliation status, and failure reason where applicable. Internal operators will be able to identify pending, delayed, failed, completed, and unreconciled settlements before they affect a payout or merchant balance.
+Rollout controls. The entire integration ships behind TROQPAY_USDC_STELLAR_ENABLED, defaulting to false. When the flag is off, the new rail causes zero behavior change in the existing Pix collection, BRL ledger, BRL Pix payout path, and current USDT payout flow. When the flag is enabled, USDC_STELLAR is still restricted to approved merchants through allowlist, transaction caps, operational review, and a kill-switch. After the capped pilot is validated, TroqPay’s stablecoin payout path will migrate from the current USDT wallet payout flow to USDC_STELLAR.
+7. Custody And Key Management
+The merchant holds the signing key. Privy provisions an embedded Stellar wallet in non-custodial mode, and the key material stays with the user. TroqPay builds a transaction, whether a USDC payment, a withdrawal, or a DeFindex call, presents it in the merchant's session, and the merchant authorizes the signature. TroqPay then submits the signed transaction and records the result. Soroban calls to DeFindex follow the same model.
+If Privy's Soroban signing path does not cover everything the vault flow needs, the contingency is a Stellar passkey smart wallet using secp256r1 and WebAuthn, keeping Privy for identity and onboarding. In either case TroqPay does not store or operate the merchant's key.
+Before any mainnet funds move, onboarding includes a recovery and lost-device procedure that keeps control with the merchant and gives TroqPay no unilateral access to funds.
+8. Money Flows
+8.1 On-Ramp: Pix In, USDC On Stellar
+1. A buyer pays a Pix charge in BRL. The provider webhook confirms it and the BRL ledger credits the merchant balance. This is the existing path.
+2. The merchant requests settlement to USDC on Stellar for an amount within their available balance.
+3. TroqPay writes the BRL debit to the ledger and instructs the licensed VASP/anchor to convert that BRL into USDC.
+4. The partner delivers native USDC on Stellar to the merchant's wallet address.
+5. TroqPay records the settlement leg, the Stellar transaction hash and the provider reference, then reconciles the on-chain balance against the ledger.
+8.2 Off-Ramp: USDC Back To BRL By Pix
+1. The merchant requests a USDC-to-BRL withdrawal. It enters the existing withdrawal state machine on a new USDC_STELLAR rail.
+2. The merchant signs a Stellar payment that sends USDC to the partner's deposit address.
+3. The partner converts USDC into BRL and pays the merchant by Pix.
+4. TroqPay completes the withdrawal once it holds both the Stellar transaction hash and the Pix endToEndId, then updates the ledger.
+8.3 Optional Yield Via DeFindex
+1. From their own wallet, the merchant signs a DeFindex deposit that moves USDC into a vault.
+2. Vault shares accrue to the merchant's wallet. TroqPay reads positions and APY through the DeFindex SDK and shows them in the app.
+3. To exit, the merchant signs a redeem and the USDC returns to their wallet.
+Yield is opt-in and separate from accepting Pix and from USDC settlement. TroqPay presents no guaranteed return, and the public wording, economics and risk disclosures require explicit merchant consent, risk disclosure and feature controls before launch.
+9. Ledger And Data Model
+The BRL ledger stays the source of truth for BRL obligations. The grant adds three record types around it:
+	•	Settlement records that tie a BRL debit to a Stellar USDC credit: asset, amount, merchant wallet, transaction hash, provider reference and status.
+	•	A wallet registry that maps a merchant to their Stellar address, the wallet provider and the custody mode.
+	•	Vault-position records for opt-in yield: vault identifier, share balance, last-read USDC balance and APY, and the read timestamp.
+Reconciliation reads on-chain wallet and vault balances and compares them against ledger obligations. Any gap is flagged for ops before it can affect a payout. The idempotency keys and advisory locks that protect BRL withdrawals today also protect the USDC legs.
+10. Security, Compliance And Trust Boundaries
+The Stellar work reuses the controls already in production: scoped API keys with TEST/LIVE separation, idempotency on money-moving calls, advisory locks around balance reservation, signed webhooks, field-level PII encryption, and the append-only PII-access audit trail.
+TroqPay builds transactions, records evidence, derives balances and reconciles. The merchant signs. A licensed Brazilian VASP/anchor performs the regulated BRL-to-USDC conversion and the KYC/KYB that goes with it. TroqPay does not buy, sell, custody or convert the asset itself.
+The mainnet pilot is limited to merchants with a registered company and approved onboarding. It runs with per-merchant caps, ops review, monitoring and a kill-switch before any wider rollout.
+11. Technology Choices And Rationale
+	•	Native USDC on Stellar, not a bridged or wrapped asset: final settlement, cent-level fees, and no wrapped-asset or pool risk.
+	•	Direct Stellar settlement, not CCTP: keeps liquidity and the merchant flow simple; CCTP stays an option only if direct liquidity is short.
+	•	Privy for wallets: seedless, non-custodial onboarding a non-crypto merchant can complete, with a passkey smart wallet as the contingency for deeper Soroban needs.
+	•	DeFindex for yield: integrates audited vault contracts instead of writing and operating our own.
+	•	Reuse of the existing ledger and withdrawal engine: its idempotency, locking and evidence-on-completion patterns already move real money, so the USDC legs inherit the same guarantees.
+
+12. Ecosystem Value & Differentiation
+This integration converts Brazilian Pix merchant demand into measurable Stellar activity: new merchant-controlled Stellar wallets, native USDC balances, on-ramp volume, mainnet transactions, and DeFindex TVL on Stellar.
+TroqPay is distribution-first, not another standalone wallet. The project starts from a merchant payments product with Pix collection, a per-merchant BRL ledger, withdrawal lifecycle, idempotency controls, and existing demand for stablecoin payouts. The grant-funded work moves the stablecoin payout path from USDT wallet payouts into native USDC on Stellar, delivered to merchant-controlled Privy wallets.
+The differentiation is the combination of local payment distribution, native USDC settlement, non-custodial wallet onboarding, and on-chain reconciliation. Versus custodial dollar-balance products, the merchant controls the wallet. Versus cold-start wallet apps, TroqPay starts from merchant Pix payment demand. Versus anchor-only ramps, TroqPay adds the merchant ledger, withdrawal lifecycle, settlement evidence, dashboard experience, and reconciliation layer.
+The DeFindex module adds a second layer of ecosystem value: idle merchant USDC can remain on Stellar and be allocated into DeFindex with merchant consent and wallet signature. 
+13. Risks And Mitigations
+	•	Depth of Privy's Soroban signing. Primary path is Privy; contingency is a Stellar passkey smart wallet. Tranche 1 proves a merchant-signed Stellar transaction on testnet, which retires this risk early.
+	•	VASP/anchor availability and timing. Partner integration runs against testnet and sandbox in Tranche 2, with stored references, explicit failure states and a manual fallback for the conversion leg.
+	•	Yield and regulation. The vault module is opt-in, separated from payments, and carries no guaranteed-return language.
+	•	Reconciliation drift. On-chain balances are compared to ledger obligations on a schedule, with alerts and pilot caps, so a gap is caught before it reaches a payout.
+	•	Key loss. A recovery and lost-device runbook is in place before mainnet, preserving merchant control.
+14. Delivery Plan  Payment #0 + Three Tranches of Deliverables and Budget Breakdown
+Total grant request: USD 60,000, paid in XLM.
+The budget follows the SCF Build Award payment structure: Payment #0 upon award acceptance, followed by three deliverable-based tranches. The three project tranches are structured as MVP, Testnet and Mainnet. The final tranche is the capped mainnet launch with UX readiness and verifiable on-chain evidence.
+Budget covers only future development of Stellar-integrated components: the USDC_STELLAR rail, Privy wallet onboarding, on/off-ramp provider integration, DeFindex integration, reconciliation, frontend flows, testing, operational monitoring, demos, documentation and launch readiness.
+Excluded from this budget: external security audit costs, marketing, user acquisition, token incentives, bounties, legal fees, entity registration, reimbursement for past work and unrelated operational activity.
+
+Payment/ Tranche
+%
+USD
+Owner
+Theme
+#0 Kickoff
+10%
+$6,000
+TroqPay
+Award acceptance, kickoff and integration readiness 
+#1 MVP
+20%
+$12,000
+PaltaLabs
+Standalone Stellar MVP
+#2 Testnet
+30%
+$18,000
+TroqPay/PaltaLabs
+Productized testnet integration
+#3 Mainnet
+40%
+$24,000
+TroqPay
+Mainnet launch + UX readiness
+Total
+100%
+$60,000
+
+
+PaltaLabs funding note. PaltaLabs quoted USD 20,000 for the standalone MVP and included support through the end of Tranche #3. The scope includes Privy wallet onboarding, on-ramp through Alfred or the selected provider into USDC on Stellar, wallet and balance experience, DeFindex deposit and withdraw, off-ramp, and 16h of support for questions, debugging and code review through the end of Tranche #3.
+PaltaLabs will be paid by TroqPay from SCF grant proceeds in installments across the project. USD 18,000 will be allocated from Payment #0 and Tranche #1 toward the standalone MVP delivery. The remaining USD 2,000 will be allocated from later SCF payments for PaltaLabs’ included support through Tranche #2 and Tranche #3.
+
+Additional PaltaLabs support beyond the included 16h will be scoped separately and will not be charged to this SCF budget unless explicitly approved as part of the grant-funded scope.  Rate basis. The USD 60,000 grant budget is split between the external MVP implementation by PaltaLabs and TroqPay’s in-house productized integration work.
+PaltaLabs’ scope is budgeted at USD 20,000 from SCF grant proceeds. This covers the standalone MVP and 16h of support through the end of Tranche #3.
+The remaining USD 40,000 funds TroqPay’s in-house engineering work across Tranche #2 and Tranche #3. TroqPay estimates approximately 300 engineering hours for Tranche #2 and approximately 420 engineering hours for Tranche #3, totaling approximately 720 in-house engineering hours. 
+This implies a blended in-house rate of approximately USD 55/hour.
+Each tranche is tied to specific deliverables, verification evidence, and a clear acceptance outcome. The work is sequenced to reduce technical risk first, then embed the validated flow into TroqPay, and finally launch a capped mainnet pilot. Tranche #1 proves the external Stellar flow in a standalone MVP; Tranche #2 productizes it in TroqPay testnet/test mode; Tranche #3 launches the controlled mainnet flow with reconciliation, monitoring, UX readiness, and rollback controls.
+Where verification depends on a TroqPay report or dashboard, the evidence will reference checkable technical artifacts such as provider references, Stellar transaction hashes, wallet addresses, vault addresses, ledger records, screenshots, or recorded walkthroughs.
+
+Payment #0 - Award Acceptance, Kickoff and Integration Readiness - USD 6,000 (10%)
+Payment #0 is released upon award acceptance. It supports the initial setup required to begin the integration safely: PaltaLabs coordination, MVP scope confirmation, testnet/sandbox preparation, integration branch setup, feature-flag planning, and idempotency readiness checks before any USDC_STELLAR money-moving path is wired.
+Purpose. Prepare the project for Tranche #1.
+Readiness activities and evidence:
+	•	PaltaLabs kickoff and MVP scope confirmation. Evidence: PaltaLabs engagement confirmed, MVP scope agreed, and Tranche #1 acceptance criteria documented.
+	•	Testnet and sandbox preparation. Evidence: Privy test app access, DeFindex testnet path, and Alfred or selected on/off-ramp provider sandbox access confirmed.
+	•	Integration branch and rollout setup. Evidence: feature/stellar-* integration branch created and TROQPAY_USDC_STELLAR_ENABLED rollout plan documented.
+
+Tranche #1 - Standalone Stellar MVP - USD 12,000 (20%) - PaltaLabs Primary Owner
+Outcome. Ship a working standalone Stellar MVP outside the TroqPay production app before embedding it into TroqPay. This tranche validates one merchant account, Privy wallet onboarding, USDC balance experience, on-ramp into native USDC on Stellar, DeFindex deposit and withdraw, and off-ramp back through on/off-ramp provider.
+This tranche is intentionally standalone. No TroqPay production-repository changes are required for Tranche #1. TroqPay participates through product requirements, technical supervision, review, and integration learning so the validated MVP can be embedded into TroqPay during Tranche #2.
+Deliverables and verification:
+	•	Working standalone MVP. Scope: merchant account, Privy wallet, USDC balance, on-ramp, off-ramp, DeFindex deposit and DeFindex withdraw. Verification: recorded demo plus testnet/sandbox transaction hashes, provider references, or SDK logs for each leg.
+	•	On-ramp into native USDC on Stellar. Scope: BRL-to-USDC test/sandbox flow through Alfred or the selected on/off-ramp provider, with native USDC delivered to the merchant-controlled Stellar wallet. Verification: provider sandbox reference and Stellar testnet transaction evidence.
+	•	Off-ramp from USDC on Stellar back to BRL. Scope: merchant signs or authorizes the required USDC flow back through on/off-ramp, and the provider returns BRL through the off-ramp path. Verification: provider sandbox reference, Stellar payment evidence, and off-ramp status evidence.
+	•	DeFindex deposit and withdraw round-trip. Scope: merchant signs a DeFindex deposit and withdraw/redeem flow from the Privy-connected Stellar wallet. Verification: testnet transaction hash or SDK evidence for deposit and withdraw.
+	•	Wallet-signing decision record. Scope: document the selected signing path for DeFindex interactions, including whether Privy alone is sufficient or whether a passkey-based fallback is required. Verification: one-page ADR supported by a merchant-signed DeFindex testnet round-trip.
+	•	Integration handoff documentation for TroqPay engineering. Scope: implementation notes covering wallet setup, signing path, provider assumptions, DeFindex flow, open issues, and Tranche #2 integration requirements. Verification: handoff document delivered to TroqPay engineering.
+	•	Recorded end-to-end MVP demo. Scope: merchant onboarding → Privy wallet → USDC balance → on-ramp → DeFindex deposit → DeFindex withdraw → off-ramp. Verification: recorded walkthrough.
+	•	Public signing reference. Scope: publish a public technical reference for the selected Stellar wallet-to-DeFindex signing path, without exposing proprietary TroqPay payment code. Verification: public repository, README, technical note, or public reference with testnet evidence.
+PaltaLabs cost mapping. PaltaLabs quoted USD 20,000 for the standalone MVP and included 16h of support through the end of Tranche #3. TroqPay will pay PaltaLabs from SCF grant proceeds in installments across the project. Payment #0 and Tranche #1 allocate USD 18,000 toward MVP mobilization and delivery. The remaining USD 2,000 is allocated from later SCF payments for PaltaLabs’ included support during Tranche #2 and Tranche #3.
+Tranche #2 - Productized Testnet Integration - USD 18,000 (30%) - TroqPay Primary Owner
+Primary owner: TroqPay engineering Support: PaltaLabs support and code review from the included 16h support package Estimated effort: approximately 300 TroqPay engineering hours Budget allocation: approximately USD 17,000 for TroqPay engineering and USD 1,000 allocated to PaltaLabs support from the included support package
+Outcome. Embed the standalone Tranche #1 MVP flow into the TroqPay merchant app and API in testnet/test mode, behind the TROQPAY_USDC_STELLAR_ENABLED feature flag. 
+Tranche #2 starts the TroqPay in-repo implementation: the USDC_STELLAR rail, provider dispatch, Privy onboarding, wallet registry, quote and validation, ledger records, testnet DeFindex flow, dashboard states, and reconciliation.
+Deliverables and verification:
+	•	USDC_STELLAR rail added behind feature flag. Scope: add the new rail behind TROQPAY_USDC_STELLAR_ENABLED, defaulting to false. Verification: code merged, flag-off regression test passes, and the existing Pix collection, BRL ledger, BRL Pix payout path, and current USDT payout flow remain unchanged when the flag is off.
+	•	Withdrawal decision points updated for USDC_STELLAR. Scope: update the relevant rail-specific branch sites in the withdrawal service, including settlement evidence, manual fallback, quote, validation, destination handling, provider handoff, processing guard, and exhaustiveness checks. Verification: branch-site checklist completed and reviewed.
+	•	Provider dispatch by rail implemented. Scope: introduce provider dispatch so USDC_STELLAR can use on/off-ramp provider through the existing payout provider interface. Verification: sandbox provider reference is stored with the settlement record and linked to the corresponding withdrawal ID.
+	•	Privy onboarding embedded in TroqPay merchant app. Scope: merchants in the USDC_STELLAR test flow receive a merchant-controlled Stellar wallet through Privy. External arbitrary wallet addresses are not used for this rail. Verification: reproducible demo merchant completes Privy onboarding inside TroqPay and has a Stellar wallet associated with the merchant account.
+	•	Idempotent Stellar account and USDC trustline setup. Scope: implement a setup process tied to merchant account, Stellar address, and network. The process verifies account activation, verifies the USDC trustline where required, and completes required setup before settlement is enabled. Verification: demo merchant wallet is active on testnet, has the required USDC capability, and the setup process can be retried without duplicating state.
+	•	Canonical USDC_STELLAR destination stored. Scope: store stellarWalletAddress or equivalent canonical destination metadata for the merchant’s Privy-connected Stellar wallet. Verification: wallet registry row and merchant payout settings show the Privy-connected Stellar wallet as the USDC_STELLAR destination.
+	•	Quote and validation for BRL to USDC_STELLAR. Scope: implement quote and validation checks for the new rail, including Stellar address format, wallet status, account status, USDC capability, merchant ownership of the destination, and available BRL balance. Verification: unit tests pass and a test quote is returned for a reproducible demo merchant.
+	•	Testnet on-ramp settlement stored end to end. Scope: run a sandbox/testnet BRL-to-USDC settlement through Alfred or the selected on/off-ramp provider, with native USDC delivered to the merchant’s Privy-connected Stellar wallet. Verification: provider sandbox reference, Stellar transaction hash, ledger movement, settlement status, and merchant wallet destination are stored.
+	•	DeFindex testnet flow embedded in TroqPay. Scope: enable a testnet DeFindex deposit and withdraw/redeem flow from the merchant’s Privy-connected Stellar wallet, with explicit merchant action and wallet signature. Verification: signed testnet transaction evidence or SDK logs for deposit and withdraw, plus vault-position readback in TroqPay.
+	•	Merchant dashboard states implemented. Scope: show the settlement lifecycle states in the TroqPay merchant app and/or internal dashboard: requested, reserved, partner_pending, on_chain_submitted, completed, failed, and reconciled. Verification: recorded walkthrough showing each state on a reproducible demo merchant account.
+	•	Testnet reconciliation report generated. Scope: compare TroqPay ledger obligations against Stellar wallet balances and DeFindex vault position for the demo merchant. Verification: generated reconciliation report and recorded walkthrough, referencing testnet wallet/vault addresses and transaction hashes that can be checked by reviewers.
+Tranche #3 - Capped Mainnet Launch and UX Readiness - USD 24,000 (40%) - TroqPay Primary Owner
+Primary owner: TroqPay engineering Support: PaltaLabs review as needed from the included 16h support package Estimated effort: approximately 420 TroqPay engineering hours Budget allocation: approximately USD 23,000 for TroqPay engineering and USD 1,000 allocated to PaltaLabs support from the included support package
+Outcome. Launch a capped mainnet pilot that brings real Pix merchant volume into native USDC on Stellar, delivered to merchant-controlled Privy wallets, with DeFindex opt-in yield, operational monitoring, on-chain reconciliation, UX readiness, and rollback controls.
+Deliverables and verification:
+	•	USDC_STELLAR enabled in LIVE for approved merchants only. Scope: enable the rail only for approved registered-company merchants using allowlist, transaction caps, operational review, and emergency disable controls. Verification: live configuration, allowlist evidence, caps, and emergency disable procedure documented.
+	•	At least one capped real Pix to USDC mainnet settlement completed. Scope: a merchant receives Pix in BRL, requests USDC settlement, and the regulated on/off-ramp provider delivers native USDC on Stellar to the merchant’s Privy-connected wallet. Verification: provider reference, BRL ledger movement, mainnet Stellar transaction hash, merchant wallet address, and settlement record.
+	•	Stablecoin payout migration path validated. Scope: validate the migration from the current USDT wallet payout path to USDC_STELLAR for eligible stablecoin payouts. Verification: current USDT payout flow remains unaffected while the flag is off; capped pilot transactions confirm that USDC_STELLAR can become the stablecoin payout path after validation.
+	•	Stellar transaction confirmation watcher live. Scope: confirm Stellar transaction finality and attach transaction hash and confirmation status as settlement evidence. Verification: operational record shows transaction hash, confirmation status, finality check, settlement status, and associated withdrawal ID for pilot transactions.
+	•	On-chain reconciliation and proof-of-funds dashboard active. Scope: compare TroqPay ledger obligations against Stellar wallet balances and DeFindex vault positions on a scheduled basis. Verification: dashboard walkthrough and reconciliation report for pilot transactions, with zero unexplained variance and references to the same mainnet transaction hashes, wallet addresses, and vault addresses submitted as evidence.
+	•	DeFindex deposit and withdraw live on mainnet. Scope: enable opt-in DeFindex deposit and withdraw/redeem for approved pilot merchants, with explicit merchant consent and wallet signature. Verification: signed mainnet DeFindex deposit and withdraw transaction hashes, consent UX evidence, and vault-position readback.
+	•	Failed or partial settlement recovery path implemented. Scope: implement and test recovery behavior for failed, delayed, or partial provider/on-chain settlement states. Verification: recovery scenario tested; retry behavior is idempotent and does not create duplicate provider requests or duplicate payout attempts.
+	•	Operational monitoring implemented around USDC_STELLAR. Scope: each settlement has a traceable operational record containing withdrawal ID, merchant ID, provider reference, provider status, Stellar transaction hash, confirmation status, ledger movement, reconciliation status, and failure reason where applicable. Verification: pilot settlement records show pending, delayed, failed, completed, and reconciled states where applicable.
+	•	UX readiness completed. Scope: merchant-facing onboarding, wallet status, settlement request, USDC balance, DeFindex opt-in, settlement status, and off-ramp screens are functional and tested. Verification: recorded end-to-end demo of merchant onboarding → Pix collection → USDC on Stellar settlement → DeFindex opt-in deposit → DeFindex withdraw → off-ramp.
+	•	Go-live metrics report delivered. Scope: report measurable Stellar ecosystem impact from the pilot. Verification: report includes USDC on-ramped, retained USDC, DeFindex TVL attributable to TroqPay merchants, active merchants on the Stellar rail, relevant wallet/vault addresses, and transaction hashes.
+	•	Launch and rollback runbooks delivered. Scope: document activation, merchant allowlist, caps, monitoring, failed settlement handling, emergency disable procedure, rollback plan, and go-live decision process. Verification: runbooks delivered and go-live decision recorded.
+Budget Alignment Statement
+Every dollar maps to a Stellar-integrated deliverable: standalone MVP implementation, Privy onboarding, USDC_STELLAR rail, on/off-ramp provider integration, DeFindex integration, frontend flows, testnet and mainnet demos, operational monitoring, reconciliation, runbooks, documentation, and launch readiness.
+The grant-funded budget totals USD 60,000:
+	•	USD 20,000 for PaltaLabs’ standalone MVP and included support through Tranche #3;
+	•	USD 40,000 for TroqPay’s in-house engineering, product integration, testing, operational readiness, reconciliation, dashboard work, and capped mainnet launch.
+15. Success Metrics
+	•	10-50 active merchants enabled on the Stellar rail.
+	•	100-300 new merchant-controlled Stellar wallets created or linked.
+	•	USD 250k-1M cumulative Pix-to-USDC on-ramp volume on Stellar.
+	•	USD 50k-200k USDC retained in wallets or DeFindex vaults.
+	•	Zero unexplained reconciliation variance for pilot transactions.
+	•	Public or reviewer-accessible evidence: transaction hashes, reconciliation reports, dashboard walkthrough and technical handoff documentation.
+
+16. References
+Crossmint. (n.d.). Privy alternatives for programmable wallets. Retrieved June 16, 2026, from https://www.crossmint.com/learn/privy-alternatives-for-programmable-wallets
+DeFindex. (n.d.). DeFindex documentation. Retrieved June 16, 2026, from https://docs.defindex.io/
+npm. (n.d.). @defindex/sdk. Retrieved June 16, 2026, from https://www.npmjs.com/package/@defindex/sdk
+OtterSec. (2025, March 18). DeFindex audit report. GitHub. https://github.com/paltalabs/defindex/blob/main/audits/2025_03_18_ottersec_defindex_audit.pdf
+PaltaLabs. (n.d.). DeFindex. GitHub. Retrieved June 16, 2026, from https://github.com/paltalabs/defindex
+PaltaLabs. (n.d.). PaltaLabs. Retrieved June 16, 2026, from https://paltalabs.io/
+Privy. (n.d.). Embedded wallets overview. Privy Docs. Retrieved June 16, 2026, from https://docs.privy.io/wallets/overview/embedded
+Stellar. (n.d.). On/off-ramps. Retrieved June 16, 2026, from https://stellar.org/use-cases/ramps
+Stellar. (n.d.). Stellar Anchor Directory. Retrieved June 16, 2026, from https://anchors.stellar.org/
+Stellar Development Foundation. (n.d.). DeFindex: DeFi made easy. Stellar Community Fund. Retrieved June 16, 2026, from https://communityfund.stellar.org/project/defindex-defi-made-easy-sc2
+Stellar Development Foundation. (n.d.). Signing Soroban invocations. Stellar Developers Documentation. Retrieved June 16, 2026, from https://developers.stellar.org/docs/build/guides/transactions/signing-soroban-invocations

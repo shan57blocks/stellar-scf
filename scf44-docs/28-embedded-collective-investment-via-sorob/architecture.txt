@@ -1,0 +1,550 @@
+Source: https://docs.google.com/document/d/1w6gW5SwUEl7QZylIBi1bp34vaEAPZmL1/edit?usp=sharing&ouid=109175901284957979851&rtpof=true&sd=true
+
+
+
+Architecture Design Document
+Escala – Embedded Collective Investment
+
+
+
+
+
+ 
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Content:
+
+○ Version:	2
+2. Solution Overview	2
+3. Key Business Flows	3
+3.1. Contribution via Remittances (Embedded Flow)	3
+3.2. Milestone-Based Fund Release	3
+Component Architecture	7
+Data Model (ER)	7
+4. Technical Aspects (Smart Contracts on Soroban)	8
+Flow Diagrams (flujos principales)	9
+Remittance Contributions → mint tokens → escrow deposits	9
+Donors contributions → mint tokens → escrow deposit	9
+Proposal → votes → attestation → funds delivery	9
+Stellar Ecosystem & Integration Track Specifics	9
+5. Section A: API Endpoints (Swagger / OpenAPI Guide)	10
+Common Headers (Multi-Tenant Architecture)	10
+GET /v1/funds/{fundId}/contributions	10
+Tokens & Tokens Factory	12
+POST /v1/tokens/mint	12
+GET /v1/tokens/{walletId}	12
+Governance: Proposals & Voting	13
+POST /v1/ proposals /{proposalsid}/proposals	13
+POST /v1/proposals/{proposalId}/votes	13
+POST /v1/proposals/{proposalId}/delegate	13
+GET /v1/proposals/{proposalId}/tally	14
+Milestones & Attestations	15
+POST /v1/projects	15
+POST /v1/ proposals /{proposalsId}/milestones	15
+POST /v1/milestones/{milestoneId}/evidence	16
+Oracles & Attestations	16
+POST /v1/oracles/attest	16
+GET /v1/milestones/{milestoneId}/attestations	16
+disbursements flow	17
+POST /v1/disbursements/request	17
+POST /v1/disbursements/{disbursementRequestId}/execute	18
+GET /v1/proposal/{proposalId}/disbursements	18
+Administration & Community	19
+POST /v1/communities	19
+POST /v1/funds	19
+POST /v1/communities/{communityId}/invite	19
+Reports & Audits	21
+GET /v1/audit/events	21
+GET /v1/dashboards/community/{communityId}	21
+Best practice for Swagger / OpenAPI	21
+Security & Architecture Guidelines	22
+○ Architecture requirements	22
+3. Confidentiality agreement	23
+4. Glossary / Appendix:	23
+○ Glossary:	23
+5. Annexes	23
+○ Annexed 1:	23
+
+
+
+
+
+
+	•	Introduction 
+	•	Version: 
+
+Version
+Autor
+Date
+1.1
+Rafael Osiris Rodríguez
+13/06/2026
+1.0
+Samuel Peralta
+13/03/2026
+ Objective of the Document The objective of this document is to define the technical architecture and integration flows for Escala, a B2B Fintech-as-a-Service (FaaS) infrastructure. This solution allows corporate clients (NGOs, cooperatives, and platforms like Amero) to embed community collective investment funds within their own applications.
+Escala abstracts the complexity of Web3, providing RESTful APIs that orchestrate smart contracts on Soroban (Stellar) for governance (Soulbound Tokens) and treasury management (USDC escrows), connecting natively with fiat rails via our Integration Track partners (MoneyGram and Circle).
+This architecture is backed by rigorous institutional validation and real-world execution. The foundational "Collective Investment" primitive of Escala was selected as a global winner at the United Nations Hackathon, following an invitation from the Stellar Development Foundation. Subsequently, our team was selected for the UNDP SDG Blockchain Accelerator, where we successfully graduated as finalists. This extensive acceleration process culminated in a live Demo Day in a municipality in Guatemala, where the entire application ecosystem—including the end-to-end B2C user flows, the Soroban smart contracts (Treasury and Governance), and the fiat-to-crypto integrations—was successfully tested and validated in a real-world community setting.
+OPEN API MOCK ARCHITECTURE SWAGER URL: https://collectiveinvestment.api.escalahq.com/api-docs/ GITHUB API MOCK ARCHITECTURE URL: https://github.com/escala-dev/collective-investment-api.git
+2. Solution Overview
+The platform's operation is based on Stellar blockchain technology and Soroban smart contracts, guaranteeing transparency and automated fund execution.
+Instead of operating solely as an end-user app, Escala acts as a multi-tenant middleware. It integrates fiat on/off-ramps, KYC/AML providers, and wallet management with on-chain Soroban contracts. Users of our B2B clients form closed groups with their own governance and finance local projects through proportional contributions.
+B2B Cloud Studio & AI (Developer Experience): Escala HQ provides a B2B 'Cloud Studio' for enterprise integration. The AI component is strictly a Developer Tool (DevTool) leveraging the Model Context Protocol (MCP). It assists B2B clients (engineers at NGOs or cooperatives) in generating repetitive configuration code, reducing the time to integrate Stellar primitives (Soroban, SDP, MoneyGram) from months to weeks. 
+Multi-layer Governance
+	•	Group Governance Token (Non-transferable / SBT): Ensures a democratic voice in general committee elections and community rules.
+	•	Project Participation Token (Fungible): Assigned proportionally to the user's USDC contribution. It confers voting power and benefits linked specifically to individual initiatives (e.g., funding a community solar panel).
+
+3. Key Business Flows
+3.1. Contribution via Remittances (Embedded Flow)
+To facilitate contributions, Escala  provides an API that B2B clients can embed in their checkout flows.
+	•	Remittance/Payment Initiation: An end-user initiates a transaction on the client's app (e.g., Amero).
+	•	Contribution Prompt: The UI asks: "Do you want to contribute to a community fund project?"
+	•	Execution: If accepted, the Escala API routes the fiat through MoneyGram/Circle, converts it to USDC, deposits it into the Soroban TreasuryContract, and mints proportional ProjectTokens to the user's wallet.  
+3.2. Milestone-Based Fund Release
+	•	Evidence Upload: The fund administrator uploads proof of work (receipts, photos) to the off-chain storage.
+	•	Oracle Attestation: An authorized Oracle (e.g., UNDP auditor) validates the evidence and signs an attestation hash.
+	•	On-Chain Voting & Release: The VotingContract verifies the quorum and majority. If passed, it triggers the TreasuryContract to release the specified USDC tranche to the vendor or administrator.
+	•	Automated Disbursements (via SDP): Once the VotingContract triggers the release from the TreasuryContract, our middleware Event Hub catches the on-chain event and immediately triggers the Stellar Disbursement Platform (SDP) REST API to execute bulk, compliant payouts in USDC to local vendors. 
+
+Onboarding and KYC 
+
+
+
+
+
+
+
+
+Governance and Voting
+
+
+Component Architecture
+
+Notes:
+	•	API Gateway with rate limits, idempotency validation.
+	•	Oracles Attestation 
+ 
+Data Model (ER)
+
+State Machine
+
+
+4. Technical Aspects (Smart Contracts on Soroban)
+The solution architecture relies on 2 foundational smart contracts deployed on the Stellar network:
+	•	TreasuryContract (USDC Escrow): Manages pooled USDC funds. It provides total transparency, allowing any party to audit accumulated balances. Funds are locked and only released upon successful cryptographic triggers from the VotingContract or Oracles.
+	•	Core Functions: deposit(), requestDisbursement(), executeDisbursement().
+	•	VotingContract (Governance & Delegation): Links voting power to the amount of participation tokens held. It includes liquid democracy features, allowing users to delegate their votes to trusted community members.
+	•	Core Functions: createProposal(), castVote(), delegateVote(), tally().
+	•	ProjectToken (FT): A fungible token minted upon USDC deposit, representing fractional ownership/contribution to a specific project.
+	•	Governance Token (SBT): A Soulbound Token granting baseline membership and governance rights within a broader community fund.
+Justification: SBTs are not a marketing feature; they are a strict compliance and governance requirement from our UNDP pilot. In vulnerable communities, voting rights must be strictly non-transferable [1 person = 1 vote] to prevent vote-buying, Sybil attacks, and fund manipulation. Soroban enforces this restriction on-chain 
+ Flow Diagrams (principals)
+Remittance Contributions → mint tokens → escrow deposits
+
+Donors contributions → mint tokens → escrow deposit
+
+Proposal → votes → attestation → funds delivery
+
+
+
+
+Stellar Ecosystem & Integration Track Specifics
+As an Integration Track submission, Escala B2B architecture is explicitly designed around existing Stellar ecosystem primitives. Our middleware orchestrates the following building blocks:
+A. Core Stellar Integration (Soroban Smart Contracts) The core logic for fund custody and governance runs entirely on Soroban (Stellar) :
+	•	TreasuryContract (USDC Escrow): Written in Rust and deployed on Soroban, this contract holds the pooled USDC . It enforces multi-signature requirements and timelocks, ensuring funds are only disbursed when milestone attestations are cryptographically verified .
+	•	VotingContract (Governance): Also a Soroban smart contract, it mints and tracks Soulbound Tokens (SBTs) for membership and fungible tokens for proportional voting power . It handles proposal creation, delegation logic, and on-chain quorum tallies .
+B. Integration Track Partners Our FaaS API Gateway connects B2B clients to the following ecosystem partners :
+	•	MoneyGram Access (Fiat On/Off-Ramp): Integrated into the Remittance Orchestrator service . When an end-user contributes via a B2B client's app (e.g., Amero), the Escala API calls the MoneyGram Access API to seamlessly convert local fiat into USDC for the Soroban TreasuryContract .
+	•	Circle (USDC Liquidity): Used as the underlying stablecoin for all community funds, guaranteeing 1:1 value preservation for diaspora remittances before they are deployed to local projects .
+	•	Stellar Disbursement Platform (SDP): Used as the core off-ramp orchestration engine. Once Soroban smart contracts release funds, Escala’s API triggers the SDP to handle the automated, milestone-based bulk payouts to local suppliers, closing the loop from fiat-in to fiat/USDC-out. 
+
+5. Section A: API Endpoints (Swagger / OpenAPI Guide)
+Common Headers (Multi-Tenant Architecture)
+To support our B2B FaaS model, all API requests must include standard authentication and tenant identification headers:
+	•	Authorization: Bearer <JWT>
+	•	Content-Type: application/json
+	•	X-Idempotency-Key: <uuid> (Required for state-changing financial endpoints)
+	•	X-Tenant-ID: <client_api_key> (Identifies the specific NGO, Cooperative, or App making the request)
+
+GET /v1/funds/{fundId}/contributions
+Description: List contributions for a specific fund (used for client dashboards).  Response
+{
+    "fundId": "fund_01",
+    "totalBalance": 1250.00,
+    "contributions": [
+        {
+            "contributionId": "c_001",
+            "userId": "user_abc123",
+            "amount": 100.00,
+            "date": "2025-09-01T12:00:00Z"
+        }
+    ]
+}
+
+
+Tokens & Tokens Factory
+POST /v1/tokens/mint
+Description: Mints project tokens following a confirmed USDC deposit (service-to-service).  Request
+{
+  "fundId": "fund_01",
+  "recipientWalletId": "wallet_def456",
+  "usdcAmount": 100.00,
+  "mintReason": "remittance_contribution",
+  "onchainTx": "0x123..."
+}
+
+Response
+{
+    "mintId": "mint_1001",
+    "token": "PT-001",
+    "amount": 100,
+    "status": "minted",
+    "onchainProof": "tx_hash_0xabc"
+}
+GET /v1/tokens/{walletId}
+Description: get tokens balance.  Response
+{
+    "walletId": "wallet_def456",
+    "uid": "user!@#$",
+    "projectTokens": [
+        {
+            "fundId": "fund_01",
+            "tokenId": "PT-001",
+            "balance": 100
+        }
+    ],
+    "governanceTokens": [
+        {
+            "fundId": "fund_01",
+            "tokenId": "GT-01",
+            "balance": 137.5
+        }
+    ]
+}
+Governance: Proposals & Voting
+POST /v1/ proposals /{proposalsid}/proposals
+Description: Creates a proposal to disburse funds, opening a voting window.  Request
+{
+    "title": "Instalar 3 cámaras de seguridad",
+    "communityId": "community_123",
+    "description": "Compra e instalación de 3 cámaras en la avenida principal",
+    "amountUsdc": 500.00,
+    "milestoneId": "ms_01",
+    "attachments": [
+        "s3://evidence/quote.pdf"
+    ]
+}
+Response
+{
+    "proposalId": "prop_200",
+    "votingWindowStart": "2025-09-08T00:00:00Z",
+    "votingWindowEnd": "2025-09-15T00:00:00Z"
+}
+POST /v1/proposals/{proposalId}/votes
+Description: Cast a vote (signed by the end-user wallet or custodial HSM)  Request
+{
+    "userId": "user_abc123",
+    "vote": "yes",
+    "signature": "base64-sig"
+}
+Response
+{
+    "voteId": "v_900",
+    "proposalId": "prop_200",
+    "votingDate": "2025-09-08T00:00:00Z",
+    "status": "recorded"
+}
+POST /v1/proposals/{proposalId}/delegate
+Description: Delegate voting power to another community member.  Request
+{
+    "fromUserId": "user_abc123",
+    "toUserId": "user_xyz999",
+    "amount": 100,
+    "tokenId": "PT-001",
+    "delegateDate": "2026-09-01T00:00:00Z"
+}
+Response
+{
+    "delegateId": "del_300",
+    "status": "active"
+}
+
+GET /v1/proposals/{proposalId}/tally
+Description: get count and snapshot of the voting.  Response
+{
+    "proposalId": "prop_200",
+    "snapshotId": "snap_10",
+    "yesWeight": 775.0,
+    "noWeight": 275.0,
+    "quorumRequired": 500.0,
+    "status": "closed",
+    "result": "approved"
+}
+
+
+
+Milestones & Attestations
+POST /v1/projects
+Description: Create project (action admin/committee).  Request
+{
+    "fundId": "fund_01",
+    "title": "Viajes educativos para jóvenes",
+    "description": "Becas y salidas de campo para 25 estudiantes",
+    "budgetUsdc": 2500.00
+}
+Response
+{
+    "projectId": "proj_001",
+    "status": "draft"
+}
+POST /v1/ proposals /{proposalsId}/milestones
+Description: create a history and plan the tasks and payments of the proposal.  Request
+{
+    "title": "Fase 1 - Transporte y alimentación",
+    "Description": "transportar al equipo de trabajo y provisiondes del mismo", 
+    "amountUsdc": 1250.00,
+    "dueDate": "2025-10-15"
+}
+Response
+{
+    "milestoneId": "ms_01",
+    "status": "open"
+}
+
+
+POST /v1/milestones/{milestoneId}/evidence
+Description: Upload project execution evidence (generates a hash stored on AWS S3/IPFS).  Request
+{
+    "uploaderUserId": "admin_001",
+    "files": [
+        "s3://evidence/photo1.jpg",
+        "s3://evidence/receipt.pdf"
+    ],
+    "notes": "Fotos y recibos de instalación"
+}
+Response
+{
+    "evidenceId": "ev_500",
+    "status": "uploaded",
+    "evidenceHash": "sha256:..."
+}
+Oracles & Attestations
+POST /v1/oracles/attest
+Description: The oracle publishes a hash signed attestation for evidence.
+ Request
+{
+    "attestorId": "oracle_01",
+    "proposalId": "ms_01",
+    "evidenceHash": "sha256:...",
+    "signature": "base64-sig"
+    "Date": "2025-10-15 00:00:00"
+}
+Response
+{
+    "attestationId": "att_400",
+    "status": "verified",
+    "verifiedBy": "oracle_01"
+}
+GET /v1/milestones/{milestoneId}/attestations
+Description: Attestation list  Response
+{
+    "milestoneId": "ms_01",
+    "attestations": [
+        {
+            "attestationId": "att_400",
+            "attestorId": "oracle_01",
+            "verifiedAt": "2025-09-10T12:00:00Z"
+        }
+    ]
+}
+disbursements flow
+POST /v1/disbursements/request
+Description: Requests a fund disbursement after a proposal passes and an oracle attests the milestone. Requires X-Idempotency-Key.  Request
+{
+    "proposalId": "prop_200",
+    "milestoneId": "ms_01",
+    "requestedByUid": "admin_001",
+    "amountUsdc": 500.00,
+    "idempotencyKey": "uuid-req-1234",
+    "RequestedDate": "2025-09-10T12:00:00Z"
+
+}
+Response
+{
+    "disbursementRequestId": "dreq_800",
+    "status": "pending_attestation_check"
+}
+
+
+POST /v1/disbursements/{disbursementRequestId}/execute
+Description: Execute  funds delivery (internal, multisig/HSM).  Request
+{
+    "executedBy": "operator_001",
+    "multisigSignatures": [
+        "sig1",
+        "sig2"
+    ]
+}
+Response
+{
+    "disbursementId": "dis_900",
+    "status": "executed",
+    "onchainTx": "tx_hash_0xabc"
+    "disbursmentsDate": "2025-09-10T12:00:00Z"
+}
+
+GET /v1/proposal/{proposalId}/disbursements
+Description: List funds disbursements  Response
+{
+    "proposalId": "proj_001",
+    "disbursements": [
+        {
+            "disbursementId": "dis_900",
+            "amountUsdc": 500.00,
+            "status": "executed"
+            "disbursmentsDate": "2025-09-10T12:00:00Z"
+        }
+    ]
+}
+
+
+
+Administration & Community
+Description: endpoints to manage the users group of a collective investment.
+POST /v1/communities
+Description: Create a community  Request
+{
+    "name": "Remesas para el desarrollo",
+    "description": "Comunidad ubicada en municipio X, desde tamaulipas hasta constitucion",
+    "adminUserId": "admin_001",
+    "defaultCurrency": "USDC"
+    "communityDate": "2025-09-10T12:00:00Z"
+}
+Response {
+    "communityId": "community_123",
+    "status": "active"
+}
+POST /v1/funds
+Description:  Create a mutual fund inside of a community.  Request
+{
+    "communityId": "community_123",
+    "name": "Proyectos generales",
+    "tokenModel": {
+        "type": "fungible",
+        "decimals": 2
+    },
+    "governanceModel": {
+        "type": "SBT",
+        "quorum": 0.2
+    }
+}
+Response {
+    "fundId": "fund_01",
+    "status": "active"
+}
+POST /v1/communities/{communityId}/invite
+Description: Invite a user  (email/QR).  Request
+{
+    "email": newuser@example.com,
+    "invitedbyId": "invt_09",
+    "role": "member"
+}
+Response {
+    "inviteId": "inv_10",
+    "status": "sent"
+}
+
+
+Reports & Audits
+GET /v1/audit/events
+Description: Search events for audits  (admin/auditor). Query params: ?projectId=proj_001&from=2025-01-01&to=2025-09-30  Response {
+    "events": [
+        {
+            "eventId": "ev_1",
+            "type": "mint",
+            "detail": {
+                "mintId": "mint_1001"
+            },
+            "timestamp": "2025-09-01T12:00:00Z"
+        }
+    ]
+}
+GET /v1/dashboards/community/{communityId}
+Description: Transparency public dashboard.  Response
+{
+    "communityId": "community_123",
+    "fundsSummary": [
+        {
+            "fundId": "fund_01",
+            "balanceUsdc": 1250.00,
+            "projects": 2
+        }
+    ],
+    "recentProposals": [
+        {
+            "proposalId": "prop_200",
+            "result": "approved"
+        }
+    ]
+}
+
+Best practice for Swagger / OpenAPI
+	•	Tags: group by auth, wallets, remittances, funds, tokens, governance, projects, attestations, admin, reporting.
+	•	Security scheme: bearerAuth (OIDC); define scopes.
+	•	Idempotency: document X-Idempotency-Key in components/parameters.
+	•	Errors handle: model:
+{
+    "error": {
+        "code": 400,
+        "message": "Invalid input",
+        "details": []
+    }
+}
+ 
+	•	Pagination: limit + cursor for list endpoints.
+	•	Rate limits:  x-rate-limit vendor extension.
+	•	Examples: include examples for request/response by examples in OpenAPI.
+
+Security & Architecture Guidelines
+	•	Authentication & Enterprise Identity (OIDC): To ensure secure multi-tenant B2B access for NGOs and cooperatives, the architecture utilizes Firebase Authentication (Google Cloud Identity Platform) as our strict OIDC (OpenID Connect) provider. Firebase natively handles the OIDC standard, issuing secure JWTs for tenant sessions, managing MFA, and seamlessly integrating with our GCP-hosted middleware without building custom identity rails. 
+	•	Key Management: Preference for non-custodial wallets via Stellar Wallets Kit; HSM architecture for custodial B2B tenant users.
+	•	Hybrid Auditability: On-chain events (Soroban) merged with off-chain logs (ElasticSearch) for regulatory reporting.
+	•	Encryption: TLS in transit and AES-256 at rest for all PII data.
+	•	Idempotency: Strict enforcement of idempotency keys to prevent double-spending or duplicate token minting during network retries.
+
+
+	•	Architecture guidelines
+
+	•	 Architecture requirements
+
+The Escala Architecture department seeks to design, develop and implement a series of guidelines and methods for the proper functioning and / or execution of the projects belonging to the strategic plan.  They will provide a timely and important improvement on the solutions required for the organization.
+Among the guidelines to be required for this project are:
+	•	 Technical documentation of the project.  It must be in the README.md file of the repository.
+
+	•	Service repositories URL (Ex: Swagger).
+
+	•	Confidentiality agreement
+
+Through this document it is approved that all the material handled and sent by both parties are transferred voluntarily and with the sole purpose of the construction or modification of business services or any system agreed between the parties.
+
+	•	Glossary / Appendix:
+	•	Glossary: 
+	•	Annexes 
+	•	 Annexed 1: 
+

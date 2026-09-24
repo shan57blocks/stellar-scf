@@ -1,0 +1,591 @@
+Source: https://docs.google.com/document/d/1ogK_j2kVoB3tLFPgYxis8aqf16dM4rI7-TB1BRa2vCQ/edit?tab=t.0#heading=h.4v3xmchx5o0w
+
+﻿Paycashless, Technical Architecture Document
+Stellar Integration Track | SCF Build Award
+1. Executive Summary
+Paycashless is a payments and financial management platform for Nigerian small and medium-sized businesses. It combines everything an SME needs to accept money, send money and manage cash flow in a single merchant account. The platform spans Digital Collections (POS, online checkout, pay-with-transfer, virtual accounts), Invoicing, Payouts (staff and suppliers paid from the same account), and Money Management & Insights (cash flow, sales, and customer analytics in one dashboard).
+
+
+Since launching in January 2026, Paycashless has processed over $600K in total merchant transaction volume, including $200K+ originating from crypto-funded payments, across live merchants in fashion retail, restaurants, and finance. Today the platform stitches together cash, separate POS providers, disconnected bank apps, and informal lender APIs to give SMEs a unified merchant experience. The architectural cost of that stitching is significant: per-product floats, per-corridor PSP integrations and zero yield on idle merchant balances.
+
+
+This proposal addresses that gap by integrating five Stellar building blocks (Privy, NEAR Intents, Anchor Platform with SEP-24 and SEP-31, MoneyGram Access, and Blend v2) plus an on-chain business intelligence layer to transform Paycashless from a multi-rail merchant aggregator into a Stellar-settled merchant operating system. After integration, every merchant has a self-custodial Stellar account from signup; crypto collections always settle as USDC on Stellar; fiat collections optionally auto-convert to USDC on Stellar based on the merchant's opt-in settings (Naira-preferring merchants keep their NGN balance untouched); payouts flow out via Anchor or MoneyGram; idle USDC earns yield via an opt-in Earn feature; and the on-chain ledger becomes the source of truth for real-time analytics for opted-in volume.
+What Changes
+Capability
+	Before (Current)
+	After (With Stellar Integration)
+	Merchant onboarding
+	Email/phone signup; no on-chain identity
+	Privy provisions a Stellar account at signup; USDC trustline ready; zero crypto literacy required
+	Digital collections
+	POS, online, transfer, and virtual-account inflows each settle to a separate PSP float in NGN
+	Opt-in auto-convert lets merchants route any or all collection rails to a Stellar USDC balance via Anchor Platform (NGN leg) or NEAR Intents (crypto leg). Naira-preferring merchants keep their NGN balance unchanged
+	Multi-chain consolidation
+	Crypto-funded payments arrive on multiple chains; each tracked separately
+	Multi-chain holdings (ETH, BTC, USDT) sweep to a single USDC on Stellar balance via NEAR Intents
+	Naira off-ramp + cash payouts
+	Per-PSP off-ramp; no native cash-pickup path
+	Anchor Platform SEP-24 (merchant withdrawals) + SEP-31 (programmatic bank payouts) + MoneyGram Access for cash pickup at 350K+ locations
+	Idle balance yield
+	Merchant USDC sits dormant earning 0%
+	Opt-in Earn feature: merchant explicitly enables it before any USDC supplies into Blend v2 pools. Off by default
+	Business intelligence
+	Multi-system reconciliation across PSPs and lender APIs
+	Single on-chain ledger (Stellar) drives real-time analytics and cash-flow reporting
+	
+
+________________
+
+
+2. Current System Architecture
+2.1 How Paycashless Works Today
+Paycashless's existing architecture is an aggregator of Nigerian payment rails wrapped in a merchant-friendly UX:
+
+
+1. Merchant signup: Email/phone + business KYC; the merchant gets a dashboard, a virtual account number, and a POS allocation if requested.
+2. Digital Collections: POS terminals, online checkout, pay-with-transfer links, and dedicated virtual accounts each route inflows through existing Nigerian PSPs (Paystack, Flutterwave, NIBSS rails, etc.). Funds land in NGN in the merchant's Paycashless balance.
+3. Invoicing: Professional invoice generation with payment-tracking and revenue recording.
+4. Payouts: Outbound transfers to staff and suppliers run on NIBSS/bank-rail integrations.
+5. Money Management & Insights: Cash flow, sales, and customer analytics derived from PSP webhooks and internal ledger.
+
+
+Since launching in January 2026, the platform has reached $600K+ in total transaction volume, with $200K+ of that volume crypto-funded, across active merchants in fashion retail, restaurants, and finance.
+2.2 Current Strengths
+* Aggregated rail coverage: One merchant account handles every Nigerian collection method (POS, online, transfer, virtual account).
+* Operator-friendly: Bank-grade UX with reconciliation, invoicing, payouts, and reporting in one dashboard.
+* Domain credibility: Built by founders who previously shipped at Moniepoint, Fincra, Mastercard, and Mono (YC W21), with hands-on Stellar experience.
+2.3 Current Limitations (Mapped to the 8 Objectives)
+#
+	Limitation today
+	Objective addressing it
+	1
+	No portable on-chain identity per merchant. Balances live in Paycashless's internal ledger; no Stellar account the merchant truly owns.
+	Obj 1 (Privy)
+	2
+	Collection methods settle to separate PSP floats in NGN. Each rail (POS, online, transfer, virtual account) has its own balance and reconciliation path.
+	Obj 2 (Digital collections settling on Stellar)
+	3
+	Crypto-funded payments arrive fragmented across chains. A merchant receiving USDT on Tron and USDC on Ethereum has two separate balances; consolidation is manual.
+	Obj 3 (NEAR Intents)
+	4
+	Off-ramp limited to bank rails; no cash-pickup path. Merchants who want to pay unbanked suppliers in cash have no integrated rail; suppliers without bank accounts get cut out.
+	Obj 4 (Anchor Platform + MoneyGram)
+	6
+	Idle merchant USDC earns nothing. Treasury balances sit dormant between collections and payouts.
+	Obj 6 (Blend v2 yield)
+	7
+	Business intelligence requires reconciling multiple PSP feeds. Real-time accuracy is bounded by the slowest webhook; cross-rail consistency requires nightly batch jobs.
+	Obj 7 (On-chain BI from Stellar ledger)
+	8
+	The merchant juggles multiple product surfaces internally, each with its own reconciliation and float.
+	Obj 8 (Unified Stellar-powered account, §3.1)
+	
+
+________________
+
+
+3. Target Architecture: Stellar as Settlement Backbone
+3.1 Architectural Vision (Objective 8: The Unified Merchant Account)
+The core architectural change is making Stellar available as the settlement layer beneath every Paycashless product, with the merchant in control of how deeply they opt in. Every merchant gets a self-custodial Stellar account at signup (Privy). Crypto-funded collections always land as USDC on Stellar via NEAR Intents. Fiat collections optionally auto-convert to USDC on Stellar via the Anchor Platform deposit flow when the merchant enables auto-convert (otherwise they continue settling as NGN, as today). Payouts can flow out from the Stellar balance via Anchor Platform SEP-24/SEP-31 or MoneyGram Access. Idle USDC can earn yield via the opt-in Earn feature. And for opted-in volume, the on-chain ledger is the source of truth for analytics and reconciliation.
+
+
+The result: one merchant account, one optional Stellar USDC balance, and a unified rail (Stellar + Soroban) covering collections, payouts, invoicing, yield, and reporting at whatever depth the merchant chooses.
+Why Stellar
+Paycashless is a merchant operating system spanning collections, payouts, yield, and on-chain BI. The chain choice is a direct consequence of which network can deliver each of those objectives natively in one place, without bolting on a separate chain per feature.
+
+
+* Anchor Platform scales merchant payouts beyond Nigeria on one protocol (powers Objectives 2 and 4): The strategic unlock from Stellar's Anchor Platform is payout reach outside Nigeria without per-country banking integrations. Paycashless merchants who import goods or pay international contractors can settle suppliers in USD, CNY, KES, GHS, ZAR, and any other Stellar-anchored currency by speaking one protocol: SEP-31 for programmatic bank payouts, SEP-24 for interactive withdrawals, and MoneyGram Access for cash pickup at 350K+ locations across 200+ countries. Every new anchor that goes live in a new corridor expands Paycashless's payout footprint automatically. The same anchor stack also handles inbound auto-convert (SEP-24 deposit, NGN to USDC) for merchants who opt in. This international payout reach is something Paycashless's existing PSP stack cannot deliver.
+* Sub-cent fees make per-rail opt-in feasible (powers Objective 2): For the opt-in collection model to work on small merchant tickets (₦500 airtime, ₦2,000 groceries), per-tx fees have to be invisible. Stellar's fractional-cent costs let auto-convert run on any rail without breaking unit economics. The opt-in granularity (per rail, by percentage, by cadence) would not survive on a chain with material per-tx fees.
+* NEAR Intents settles directly into Stellar USDC (powers Objective 3): NEAR Intents' solver network treats Stellar USDC as a first-class destination, so cross-chain consolidation lands as final settled USDC in the merchant's Stellar account in one atomic operation. No intermediate hop, no separate wrapped asset, no per-chain treasury for Paycashless to manage.
+* Native USDC plus per-merchant Stellar accounts keep the unified account a single asset (powers Objectives 1 and 8): Circle issues USDC natively on Stellar with no bridging. Each merchant has their own self-custodial Stellar account, provisioned via either Privy (Path A) or Paycashless's regular auth (Path B, see §4.2), so collections, payouts, and yield all sit in the same merchant-owned account in the same asset. There is no shared float, no per-rail asset version to reconcile, and the unified-account promise holds at the protocol level rather than as a UX abstraction.
+
+
+
+
+
+
+
+
+3.2 Full System Diagram
+  
+
+
+
+________________
+
+
+4. New Components: Detailed Technical Specification
+4.1 Settlement Engine (Enabling Foundation)
+The Settlement Engine is the foundational new component that ties the five named integrations together. It owns the mapping between a Paycashless merchant and their Stellar account, routes every credit and debit, and serves as the publishing source for the BI layer.
+What It Does
+When a merchant action touches their balance (collection from a customer, payout to staff/supplier, yield deposit, off-ramp), the Settlement Engine:
+
+
+1. Resolves the merchant's Stellar account (provisioned by Privy at signup).
+2. Determines the settlement path (fiat collection via Anchor deposit, crypto collection via NEAR Intents, outbound payout via Anchor SEP-24/SEP-31 or MoneyGram).
+3. Updates Paycashless's internal ledger with the on-chain transaction hash.
+4. Publishes an event to the BI pipeline for analytics 
+Technical Details
+Account Management
+
+
+* Each merchant receives a dedicated Stellar account provisioned by Privy (§4.2).
+* The Settlement Engine maintains the mapping (paycashless_merchant_id ↔ stellar_address).
+* USDC trustline established at account creation via changeTrust (asset code USDC, issuer: Circle's Stellar address).
+* Account provisioning is idempotent.
+
+
+Balance Tracking
+
+
+* The engine subscribes to each merchant's Stellar account via Horizon's Server-Sent Events (SSE) streaming endpoint, filtered by USDC asset.
+* Every credit triggers a real-time push to the merchant dashboard.
+* A reconciliation worker runs every 5 minutes comparing on-chain balances against Paycashless's internal ledger; discrepancies are flagged for ops review.
+
+
+Event Publishing
+
+
+* Every settled transaction publishes an event to an internal message bus (Kafka/Redpanda).
+* The BI service (§4.8) consumes from this bus to maintain real-time analytics.
+
+
+APIs & SDKs Used
+
+
+* stellar-sdk (TypeScript): transaction building, account operations, signature handling.
+* Stellar Horizon REST API: balance queries, transaction history, streaming.
+* Stellar RPC: Soroban contract invocations for Blend v2 calls.
+
+
+________________
+
+
+4.2 Privy: Embedded Wallet Onboarding (Objective 1)
+The Problem It Solves
+Nigerian SME owners don't have crypto-native onboarding patience. Asking a fashion retailer or restaurant operator to install a wallet extension, copy a seed phrase, or hand-sign a Stellar transaction is a barrier that breaks the funnel at signup. Paycashless works around this today by holding merchant balances in its own custody.
+
+
+The Stellar integration changes that. Every Paycashless merchant gets a real Stellar account at signup, their own, without ever seeing the underlying complexity. Privy provides the embedded wallet infrastructure.
+How It Works
+Every Paycashless merchant has a Stellar wallet exposed natively in their dashboard, regardless of which authentication method they use. Privy is offered as one of the auth options, recommended for SMEs without crypto experience because it removes the seed-phrase and wallet-installation barrier entirely. Merchants who prefer the regular Paycashless login they already use can continue with it; the dashboard exposes the same Stellar wallet either way.
+
+
+Path A: Privy auth (recommended for non-crypto users)
+
+
+1. SME operator signs in with email, phone, or social login via the Privy SDK.
+2. Privy generates a Stellar key pair via MPC, with one share held by Privy and one tied to the auth provider.
+3. Paycashless backend reads the merchant's Stellar address, registers it in the Settlement Engine, and submits createAccount + changeTrust for USDC.
+4. Merchant lands on the dashboard with the Stellar wallet visible and ready to receive USDC.
+
+
+Path B: Regular Paycashless auth (for merchants who prefer their existing login)
+
+
+1. Merchant signs in with their existing Paycashless credentials.
+2. Paycashless backend provisions a Stellar account on their behalf; signing keys are managed under Paycashless's existing encrypted key vault.
+3. The same Settlement Engine registration and createAccount + changeTrust flow runs.
+4. Merchant sees the Stellar wallet natively in their dashboard.
+
+
+Both paths converge: every merchant has a Stellar account in their Paycashless dashboard.
+
+
+Account recovery:
+
+
+* Privy users: re-login via auth provider reconstructs the signing-key share. No seed phrases shown.
+* Regular-auth users: standard Paycashless account recovery (password reset, MFA); keys remain in Paycashless's encrypted vault.
+* All users: Stellar account export is supported for any merchant who wants pure self-custody outside both Paycashless and Privy.
+
+
+APIs & SDKs Used
+
+
+* @privy-io/react or @privy-io/expo for the Paycashless web/mobile clients.
+* @privy-io/server-auth for backend session validation.
+* Privy's wallet provider with a Stellar adapter for transaction signing.
+
+
+________________
+
+
+4.3 Digital Collections Settling on Stellar (Objective 2)
+The Problem It Solves
+A Nigerian SME's customers pay in many ways: card at a POS terminal, bank transfer to a virtual account, online checkout, pay-with-transfer links. Each rail today settles into a separate PSP float in NGN. The merchant sees one balance in the dashboard, but underneath, Paycashless runs reconciliation across N PSPs to keep that balance accurate.
+
+
+This objective offers merchants a single Stellar USDC settlement asset as an opt-in for any or all of their collection rails. Merchants who want to keep their Naira keep their Naira; merchants who want USDC on Stellar (for yield, off-ramps, or treasury simplicity) enable auto-convert and start settling on-chain.
+How It Works
+Customer-facing collection methods stay unchanged: POS terminals continue accepting cards, virtual accounts continue receiving bank transfers, online checkouts continue processing card and bank rails. What changes is the back end: based on each merchant's auto-convert settings, inbound NGN either:
+
+
+* Stays as NGN in the merchant's existing PSP-backed balance (default behavior, identical to today), or
+* Converts to USDC on Stellar via the Anchor Platform deposit flow (SEP-24) and credits the merchant's Stellar account (when auto-convert is enabled for that rail).
+
+
+Auto-convert is configurable at granular levels:
+
+
+* Per rail: e.g., POS receipts auto-convert to USDC; online checkout stays as NGN.
+* By percentage: e.g., auto-convert 50% of collections, retain 50% in NGN for daily operations.
+* By cadence: real-time, hourly batched, or end-of-day batched. For high-frequency, low-ticket collections, batched conversion amortizes anchor and Stellar fees.
+
+
+Crypto-funded collections (§4.4) always settle directly to the merchant's Stellar USDC balance since there is no NGN intermediate to preserve. Merchants who never opt into auto-convert for fiat collections still receive crypto inflows on Stellar.
+
+
+Per-rail flow:
+
+
+Collection rail
+	Customer-facing UX
+	Backend settlement path
+	POS terminal
+	Customer taps card, enters PIN
+	PSP receives NGN. If auto-convert is enabled for POS: Paycashless triggers Anchor Platform SEP-24 deposit NGN → USDC, USDC credits merchant's Stellar account. Otherwise: NGN stays in PSP float as today.
+	Online checkout
+	Customer selects card or transfer, completes payment
+	Same as POS: PSP receives NGN, conditional SEP-24 deposit based on auto-convert setting
+	Pay-with-transfer
+	Customer sends NGN bank transfer to a dynamic account
+	NIBSS confirms transfer, conditional SEP-24 deposit converts NGN to USDC on Stellar (auto-convert enabled) or stays as NGN
+	Virtual account
+	Customer sends NGN bank transfer to a static merchant account number
+	Same as pay-with-transfer
+	Crypto QR / link
+	Customer pays in BTC, ETH, USDT, USDC from any chain
+	Routed through NEAR Intents (§4.4) directly to USDC on Stellar (always on-chain, no opt-in required)
+	Why This Matters
+* Merchant choice respected: SMEs that prefer Naira keep Naira. Those that want Stellar USDC opt in and get it.
+* One Stellar balance across opted-in rails: For merchants who enable auto-convert, NGN POS receipts and crypto checkouts both end up as USDC in the same Stellar account.
+* Activates downstream features: Yield on the merchant's Stellar USDC balance. Enabling auto-convert is what activates those features deeply; it's a clear product narrative for SMEs ("turn it on to access yield").
+* Reduces PSP-float reconciliation for opted-in volume: Stellar becomes the source of truth for any collections the merchant has chosen to settle on-chain.
+
+
+________________
+
+
+4.4 NEAR Intents: Multi-Chain Crypto Consolidation (Objective 3)
+The Problem It Solves
+A growing share of Paycashless collections is already crypto-funded ($200K+ of $600K+ total volume). Customers pay in USDT on Tron, USDC on Ethereum, BTC, ETH. Today each chain is a separately tracked balance and a separate operational responsibility for Paycashless. There is no automated consolidation into a single asset, which means the merchant cannot use a multi-chain mixed balance as collateral, as yield deposit, or as an off-ramp source without manual swaps.
+
+
+NEAR Intents solves this by acting as a cross-chain settlement router: every crypto inflow becomes USDC on Stellar at the moment of confirmation.
+How It Works
+NEAR Intents operates on a solver model. Paycashless submits an intent (X of asset A on chain C → USDC on Stellar address Y). Solvers compete to fill the swap. The best rate wins. Execution is atomic.
+
+
+Crypto-collection flow:
+
+
+1. Customer pays a Paycashless merchant in crypto (e.g., 10 USDT on Tron via QR code or hosted checkout).
+2. Paycashless backend detects the inbound payment on the chain-specific monitoring address.
+3. Settlement Engine submits a NEAR Intent: (Tron, USDT, 10) → (Stellar, USDC, merchant_address).
+4. Solver fills in 30–120 seconds depending on source-chain finality.
+5. USDC arrives at the merchant's Stellar address.
+6. Dashboard updates in real time.
+
+
+Failure handling:
+
+
+* 5-minute intent expiry; funds remain on source chain if no solver fills.
+* Circuit breaker after 3 consecutive failures pauses cross-chain routing.
+* Slippage protection via min_amount_out per intent.
+
+
+Supported source chains (matching the interest-form objective):
+
+
+Source chain
+	Supported assets
+	Destination
+	Ethereum
+	ETH, USDC, USDT
+	USDC on Stellar
+	Bitcoin
+	BTC
+	USDC on Stellar
+	Tron
+	USDT
+	USDC on Stellar
+	Stellar
+	USDC, XLM
+	Direct (no routing)
+	
+
+APIs Used:
+
+
+* NEAR Intents 1Click API for intent creation, solver discovery, execution.
+* Solver-side webhook for execution confirmation.
+* Horizon for Stellar-side verification.
+
+
+________________
+
+
+4.5 Anchor Platform + MoneyGram Access: Off-Ramps and Cash Payouts (Objective 4)
+The Problem It Solves
+Paycashless merchants need two distinct outbound rails:
+
+
+1. Naira off-ramp to the merchant's own bank account (for the operator to draw cash, pay rent, manage business spending).
+2. Programmatic payouts to staff, suppliers, and partners, some banked and some cash-only.
+
+
+Today the merchant relies on a patchwork: PSP withdrawal APIs for self-withdrawal, NIBSS bank transfers for staff, and entirely informal arrangements for cash payments to unbanked suppliers.
+
+
+The Anchor Platform (SEP-24 and SEP-31) plus MoneyGram Access cover both rails on the same Stellar USDC balance.
+How It Works
+Anchor Platform SEP-1 + SEP-10: Discovery and mutual authentication with the NGN anchor.
+
+
+Anchor Platform SEP-24 (Interactive Withdrawal): Used for merchant-initiated cashouts from the dashboard.
+
+
+1. Merchant clicks "Withdraw ₦X to bank" in the dashboard.
+2. The anchor's SEP-24 interactive flow opens, where the anchor performs its own KYC, collects the merchant's bank details, and confirms.
+3. Paycashless submits USDC to the anchor's Stellar address with the SEP-24 transaction ID encoded in memo.
+4. Anchor receives USDC, converts to NGN, wires to the merchant's bank.
+5. Status polling via SEP-24 transaction endpoint feeds real-time dashboard updates.
+
+
+Anchor Platform SEP-31 (Cross-Border / Programmatic Payments): Used for bulk and recurring bank payouts such as staff salary runs and supplier invoices. The receiving anchor performs its own KYC and compliance on each recipient on its end.
+
+
+1. Merchant uploads a payroll/supplier CSV or schedules recurring payouts.
+2. Paycashless emits one SEP-31 transaction per recipient: USDC → NGN to recipient bank account.
+3. Status flows back to the dashboard per recipient.
+4. No interactive flow for the merchant; the recipient sees NGN credit in their bank account.
+
+
+MoneyGram Access (Cash Pickup at 350K+ Locations): Used for payouts to unbanked recipients or anywhere the recipient prefers cash.
+
+
+1. Merchant initiates a payout with the recipient's phone number and pickup country.
+2. Paycashless executes a Stellar DEX path payment: USDC → XLM atomically, with XLM delivered to MoneyGram's Stellar address.
+3. MoneyGram returns a reference number; recipient shows ID + reference at any MoneyGram location to collect cash.
+4. Status polled via MoneyGram API; results pushed to the dashboard.
+Initial Corridor and Coverage
+Corridor
+	Currency
+	Rail
+	Phase
+	Nigeria (primary)
+	NGN
+	Anchor Platform SEP-24 (self-withdrawal) + SEP-31 (staff/supplier bank payouts)
+	T2
+	Cash pickup
+	Local currency at any MoneyGram location
+	MoneyGram Access via Stellar DEX USDC→XLM
+	T2
+	Additional anchors as they go live
+	per anchor
+	SEP-24/SEP-31
+	T3
+	
+
+APIs Used:
+
+
+* SEP-1, SEP-10, SEP-24, SEP-31 endpoints on the chosen NGN anchor.
+* MoneyGram Access API for cash payout submission and status polling.
+* Stellar DEX (via pathPaymentStrictSend) for the USDC→XLM leg of the MoneyGram flow.
+
+
+________________
+
+
+4.6 Blend v2: Yield on Idle Merchant Balances (Objective 6)
+The Problem It Solves
+Between collections and payouts, a Paycashless merchant's USDC balance is effectively float. Today that float earns nothing.
+
+
+Blend v2 doubles as the yield rail: idle merchant USDC is automatically supplied into Blend pools and earns yield.
+How It Works
+Earn is strictly opt-in. It is off by default. A merchant must explicitly enable it in settings before any USDC is supplied to Blend; until then, idle USDC stays in the merchant's Stellar account untouched. Once enabled, the merchant sets a liquid reserve threshold (e.g., "always keep $200 USDC liquid for daily operations") and chooses whether deposits are real-time, batched daily, or manual.
+
+
+Yield flow (after opt-in):
+
+
+1. Merchant enables Earn and sets a liquid reserve threshold + deposit cadence.
+2. Whenever the merchant's Stellar USDC balance exceeds the reserve, the Settlement Engine calls supply(pool_id, USDC, excess_amount) on Blend.
+3. Yield accrues in real time; the dashboard shows current APY.
+4. When the merchant initiates an off-ramp or payout that would exceed the liquid reserve, the Settlement Engine first calls withdraw(pool_id, shares, needed_amount) to top up.
+5. The merchant can disable Earn at any time, which triggers a full withdraw and pauses future supplies.
+Risk Communication
+The Paycashless UI explains clearly:
+
+
+* Blend is a non-custodial DeFi protocol; supplied USDC is in smart contracts, not Paycashless's custody.
+* Yield rates fluctuate with pool utilization.
+* During high-utilization periods there may be brief withdrawal delays.
+* Paycashless initially supports only the most liquid single-asset USDC pool.
+
+
+APIs & SDKs Used:
+
+
+* stellar-sdk for Soroban contract invocation.
+* Blend pool contract IDs (mainnet + testnet) for supply / withdraw / claim calls.
+
+
+________________
+
+
+4.7 On-Chain Business Intelligence (Objective 7)
+The Problem It Solves
+Paycashless's analytics layer today reconciles webhooks from multiple PSPs and NIBSS feeds to produce dashboards. Real-time accuracy is bounded by the slowest webhook; cross-rail consistency requires nightly batch jobs. 
+
+
+With Stellar as the settlement backbone, the on-chain ledger becomes the single, real-time source of truth.
+How It Works
+A BI service consumes from two streams:
+
+
+1. The Settlement Engine event bus (Kafka/Redpanda) for fresh settled transactions enriched with Paycashless metadata (merchant ID, collection rail, customer reference, invoice ID).
+2. Stellar Horizon SSE for ground-truth on-chain transactions, used for reconciliation and integrity checks.
+
+
+Outputs:
+
+
+* Real-time dashboard widgets: rolling sales, top customers, average ticket size, today's vs. yesterday's collections, cash position.
+* Aggregate analytics: weekly/monthly cohorts, vertical comparisons, growth curves.
+* Exportable reports: tax-ready summaries, audit logs, ledger statements derived from Stellar transactions.
+Why On-Chain BI Wins
+* One source of truth: no PSP reconciliation tax.
+* Real-time: Horizon SSE delivers settled transactions within seconds; analytics are live, not lagged.
+* Auditable: every dashboard number traces back to a Stellar transaction hash.
+* Composable: the same pipeline outputs feed merchant analytics and tax/regulatory reporting from one ledger.
+
+
+APIs & Stack:
+
+
+* Horizon REST + SSE for ground-truth.
+* Internal message bus for enriched events.
+* Time-series storage (e.g., TimescaleDB / ClickHouse) for analytics queries.
+________________
+
+
+5. Complete Merchant Lifecycle: End to End
+This section traces a single Paycashless merchant (a Lagos fashion retailer) through every integration, exercising all 8 objectives. The walkthrough assumes the merchant has opted in to auto-convert for POS and online collections and Earn with a $200 USDC liquid reserve. Merchants who don't opt in still get all the same product surface; the underlying settlement just stays as NGN where they prefer.
+
+
+STEP 1: SIGNUP (Privy, Objective 1)
+══════════════════════════════════════════════════════════
+Merchant signs up to Paycashless with email + business KYC.
+Privy provisions a Stellar account via MPC.
+Settlement Engine submits createAccount + changeTrust (USDC).
+Result: merchant holds 1 XLM reserve, 0 USDC, ready to receive.
+STEP 2: POS COLLECTION (Objective 2 + Objective 8)
+══════════════════════════════════════════════════════════
+Customer buys a ₦15,000 jacket; taps card at Paycashless POS.
+PSP confirms NGN payment.
+Settlement Engine triggers Anchor SEP-24 deposit: NGN → USDC.
+~$10 USDC arrives in merchant's Stellar account.
+Dashboard: "Sale received: ₦15,000 (10 USDC). Balance: 10 USDC."
+STEP 3: ONLINE + CRYPTO COLLECTIONS (Objectives 2 + 3 + 7)
+══════════════════════════════════════════════════════════
+Same merchant runs an online sale weekend.
+- ₦80,000 in card + transfer checkouts → SEP-24 → ~52 USDC.
+- 15 USDT (Tron) paid via crypto QR → NEAR Intents → ~14.95 USDC.
+- 8 USDC (Ethereum) paid by an international customer → NEAR Intents → ~7.99 USDC.
+All settle into the same Stellar USDC balance.
+BI dashboard (§4.8) updates in real time:
+ - Total weekend sales: $84.94
+ - By rail: POS 12%, online 61%, crypto 27%
+ - Top customer cohort: international (new vertical signal)
+STEP 4: STAFF PAYOUTS (Objective 4)
+══════════════════════════════════════════════════════════
+End of week: merchant pays 4 staff their wages.
+- 3 staff have bank accounts: SEP-31 programmatic NGN payouts.
+- 1 supplier has no bank account: MoneyGram Access cash pickup.
+Settlement Engine debits USDC, executes SEP-31 batch + MoneyGram path payment.
+All settled within minutes; dashboard shows per-recipient status.
+STEP 5: EARN YIELD ON IDLE BALANCE (Objective 6)
+══════════════════════════════════════════════════════════
+Merchant has Earn enabled; liquid reserve is $200.
+After payouts the merchant holds $620 USDC.
+Settlement Engine supplies excess $420 to Blend v2 pool.
+Dashboard: "Earning ~4.8% APY on $420."
+STEP 6: MONTHLY REPORTING (Objective 7 + Objective 8)
+══════════════════════════════════════════════════════════
+Merchant exports monthly statement.
+BI service generates a Stellar-derived report:
+ - Total collections by rail
+ - Total payouts by destination
+ - Yield earned on idle balance
+ - Tax-ready summary with every line tied to a Stellar tx hash.
+
+
+
+
+6. Security Architecture
+6.1 Key Management
+Key management depends on the auth path the merchant chose at onboarding (§4.2):
+
+
+* Privy MPC keys (Path A): The merchant's Stellar signing key is split via Privy's MPC. No single party (Paycashless, Privy, or the merchant) holds a complete key. Re-login reconstructs the signing-key share without exposing seed phrases.
+* Paycashless-managed keys (Path B): For merchants using regular Paycashless auth, signing keys are generated server-side and stored in Paycashless's encrypted key vault (AES-256-GCM with per-merchant encryption keys), accessed by an isolated signing service. Recovery follows standard Paycashless account-recovery flows (password reset + MFA).
+* Server-side operations (both paths): When Paycashless initiates a Stellar transaction on the merchant's behalf (e.g., supplying to Blend, executing SEP-31 batch), the merchant authorizes via their chosen auth flow.
+* Self-custody export (both paths): Merchants who want pure self-custody can export their Stellar account keys at any time, transferring ownership outside both Paycashless and Privy.
+6.2 Transaction Security
+* Idempotent settlement: Every Settlement Engine operation is keyed by Paycashless's internal transaction ID; replay attempts are no-ops.
+* Soroban authorization scope: All Blend v2 interactions are limited to supply, withdraw, claim, get_position only.
+* Anchor mutual auth: SEP-10 challenge-response runs before every fiat transaction.
+* NEAR Intents slippage: Each intent specifies a min_amount_out floor; failed slippage causes the intent to expire safely.
+* MoneyGram correlation: Each cash-payout path payment encodes the MoneyGram reference number in the Stellar memo for end-to-end traceability.
+6.3 Monitoring & Reliability
+* Horizon SSE streaming on every merchant account for real-time inflow detection.
+* Reconciliation worker runs every 5 minutes comparing on-chain Stellar balances to Paycashless's internal ledger; discrepancies are flagged for ops review.
+* Circuit breakers on all external integrations (NEAR Intents, anchor APIs, MoneyGram API, Blend RPC calls).
+* Alerting via PagerDuty for: failed settlements, stuck off-ramps, intent timeouts, MoneyGram pickup failures, reconciliation breaks.
+* Target uptime: 99.5%+ across all Stellar integration components.
+6.4 Compliance
+* Fiat off-ramps via regulated anchors: KYC/AML is handled by the anchor per Nigerian regulations.
+* MoneyGram compliance: Handled by MoneyGram's existing regulatory framework per jurisdiction.
+* Existing Paycashless KYC: Continues to serve as the first-level identity gate for merchants.
+* Auditability: Stellar transaction history is fully on-chain; the BI service maintains exportable reports for regulatory requests.
+
+
+________________
+
+
+7. Technology Stack
+Layer
+	Current
+	Added by This Integration
+	Merchant client
+	Web dashboard + mobile app (collections, invoices, payouts, reports)
+	Privy auth flow, Stellar account display, NEAR Intents inflow progress, SEP-24 WebView for withdrawals
+	Backend
+	Node.js / TypeScript REST API integrating PSP webhooks, NIBSS rails
+	Settlement Engine, intent submission and tracking, anchor session manager, MoneyGram API client, Blend position manager, event bus producer
+	Blockchain SDKs
+	Chain-specific (web3.js, tronweb, bitcoinjs)
+	stellar-sdk, Stellar RPC client
+	External APIs
+	PSP APIs (Paystack/Flutterwave), NIBSS, KYC providers
+	Horizon REST + SSE, NEAR Intents 1Click API, anchor SEP endpoints, MoneyGram Access API, Blend contract reads
+	Smart contracts
+	None
+	Blend v2 Soroban contracts (mainnet + testnet contract IDs)
+	Wallet infrastructure
+	Custodial internal ledger
+	Privy SDK for embedded Stellar wallets (MPC)
+	Database
+	PostgreSQL (merchants, balances, invoices, payouts)
+	+ Stellar account mappings, Blend positions, anchor session state, intent tracking, event bus topics, BI feature store
+	Analytics
+	PSP webhook aggregator + nightly batch
+	+ Horizon-fed real-time BI pipeline, time-series store
+	Infrastructure
+	Cloud-hosted, auto-scaling
+	+ Horizon SSE consumers, reconciliation workers, anchor status pollers, MoneyGram pickup pollers

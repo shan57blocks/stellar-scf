@@ -1,0 +1,186 @@
+Source: https://github.com/Consulting-Manao/chimpdao-contracts/blob/main/README.md
+
+# Chi//mp: physical-backed tokens on Stellar
+
+Chi//mp links a Stellar non-fungible token (NFT) to a single physical object
+through an NFC chip embedded in the object. The chip generates its own
+elliptic-curve key pair in tamper-resistant silicon, the private key never
+leaves the chip, and an ECDSA signature from the chip authorises every
+state-changing call on the NFT. The repository serves both as a deployed
+Stellar mainnet system and as a reproducible reference implementation for
+studying hardware-anchored authorisation on a non-EVM ledger.
+
+## What this is
+
+Production systems that tie a physical object to a digital identifier through
+an NFC chip either keep a chip identifier in a custodial database (vulnerable
+to cloning of identifier-only tags) or live on Ethereum-compatible chains
+(ERC-5791 / Chiru Labs PBT). Stellar previously had no open-source equivalent.
+Chi//mp provides one: Soroban contracts that treat an on-chip ECDSA signature
+as the authoritative credential for NFTs and per-chip Pocket accounts, plus
+an example app that locks tokens under a chip public key.
+
+## Docs
+
+| Doc | Content |
+|-----|---------|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Crate map, deploy/lifecycle diagrams, storage |
+| [`docs/AUTH.md`](docs/AUTH.md) | ChipAuth digest, replay, Pocket vs Earn |
+
+## Repository layout
+
+| Path                                            | Purpose                                                                             |
+|-------------------------------------------------|-------------------------------------------------------------------------------------|
+| [`contracts/nfc-nft/`](contracts/nfc-nft)       | SEP-50 NFT contract; every mutator requires a chip attestation for that exact call. |
+| [`contracts/collection/`](contracts/collection) | Factory that deploys NFC-NFT contracts and indexes ownership across them.           |
+| [`contracts/account/`](contracts/account) | **Chimp account** — the durable root; a flat set of cards, any one of which signs. |
+| [`contracts/pocket/`](contracts/pocket) | **Pocket** — per-card purse; a Soroban custom account keyed by the chip. |
+| [`contracts/pocket-factory/`](contracts/pocket-factory) | Deploys Pocket accounts (`salt = sha256(pubkey)`). |
+| [`contracts/chip-auth/`](contracts/chip-auth) | Shared k1 + r1 IntAuth verification (rlib, linked not deployed). |
+| [`examples/prize/`](examples/prize)             | Example app: per-chip token vault (not core protocol).                              |
+| [`Makefile`](Makefile)                          | Build, test, deploy and admin targets.                                              |
+
+Administration lives in **chimpdao-terminal** (card setup, mint, claim) and in the
+Makefile (deploy, `contract_clawback`). The repo previously carried a second React admin
+`dapp/`; it was superseded by the terminal and is removed.
+
+### Accounts, purses and cards
+
+The durable account is the **Chimp account**: a flat set of cards where any one of them
+can sign (1-of-n), and a card's 65-byte public key *is* its identity. That is what makes
+a card replaceable — losing one is `remove_card` + `add_card`, not losing the balance.
+There is no rule, policy or signer-id layer, and no OpenZeppelin.
+
+**Pocket** is the per-card purse: the float for fast taps *and* the card's DeFi
+positions, so giving a loaded card away needs no unwind — the purse travels with it. It
+stores the owning Chimp account so that account can `sweep` a lost card.
+
+```bash
+make contract_build
+make contract_test
+make contract_deploy_all       # fresh network only — never mainnet
+```
+
+`contract_deploy_all` runs the pieces in dependency order. Two wiring steps are easy to
+miss when running targets by hand: `contract_configure_factory` pins the Pocket wasm hash
+the factory may deploy, and `contract_set_factory` points nfc-nft back at the factory —
+without which a card handover silently leaves the purse behind.
+
+Auth: Pocket and the Chimp account both implement `CustomAccountInterface` and both sign
+the **same** host-computed payload, so the host binds each signature to the exact call.
+There is no Pocket `transfer` entry point and no app-level nonce. Only the envelope
+differs — a purse has one card, an account has a set and the signature names which one.
+Details in [`docs/AUTH.md`](docs/AUTH.md).
+
+The NFC hardware bridge lives in **[chimpdao-nfc-bridge](https://radicle.network/nodes/radicle.consulting-manao.com/rad%3Az2CDTfvUguLG3UboK46HyYxoxg1og)**; the merchant POS in **[chimpdao-terminal](https://radicle.network/nodes/radicle.consulting-manao.com/rad%3Az4Y793TkQB4X4Uz4CRdEMUHxakZKt)** (Radicle repos under consulting-manao).
+
+```bash
+git clone https://radicle.consulting-manao.com/z2CDTfvUguLG3UboK46HyYxoxg1og.git chimpdao-nfc-bridge
+git clone https://radicle.consulting-manao.com/z4Y793TkQB4X4Uz4CRdEMUHxakZKt.git chimpdao-terminal
+```
+
+The full chip-integration guide is in [`README_NFC.md`](README_NFC.md). The
+mobile tap-to-claim flow lives in a companion iOS application.
+
+## Mainnet deployment
+
+| Contract                      | Network | Address                                                                                                                                                                 |
+|-------------------------------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `collection`                  | mainnet | [`CCWQBP7UOTSHMNEVE2P2DCLNI37CFA4WNPMUBNES5BH7QEEEUBXL7Y5Z`](https://stellar.expert/explorer/public/contract/CCWQBP7UOTSHMNEVE2P2DCLNI37CFA4WNPMUBNES5BH7QEEEUBXL7Y5Z)  |
+| `nfc-nft` (collection `chi1`) | mainnet | [`CCTPN4LRCNJBLC3VVEYET7MRLQHSAAXTQG4YBG7W3HORHZFHJIIQ7BLO`](https://stellar.expert/explorer/public/contract/CCTPN4LRCNJBLC3VVEYET7MRLQHSAAXTQG4YBG7W3HORHZFHJIIQ7BLO)  |
+| `prize` (example)             | testnet | [`CBVSY77ZRLZQ7OR62MIERRL6VNZMFZOVSCASS77J4NAR5VMRLXTVWE3F`](https://stellar.expert/explorer/testnet/contract/CBVSY77ZRLZQ7OR62MIERRL6VNZMFZOVSCASS77J4NAR5VMRLXTVWE3F) |
+
+All deployment IDs are committed under
+[`.config/stellar/`](.config/stellar) and are kept in sync with the `Makefile`
+targets.
+
+---
+
+Source: https://github.com/Consulting-Manao/chimpdao-contracts/blob/main/README_NFC.md
+
+# NFC Chip Integration Guide
+
+Using Infineon SECORA and NXP MIFARE DUOX chips with the Stellar contracts: mint, claim and transfer NFTs with hardware-backed signatures.
+
+## Related repositories
+
+| Repo | Radicle | Purpose |
+|------|---------|---------|
+| **chimpdao-nfc-bridge** | [z2CDTfv…](https://radicle.network/nodes/radicle.consulting-manao.com/rad%3Az2CDTfvUguLG3UboK46HyYxoxg1og) | Node.js PC/SC WebSocket bridge + `@chimpdao/nfc-client` |
+| **chimpdao-terminal** | [z4Y793T…](https://radicle.network/nodes/radicle.consulting-manao.com/rad%3Az4Y793TkQB4X4Uz4CRdEMUHxakZKt) | Merchant tap-to-pay (XRPL + Stellar UI) |
+| **chimpdao-contracts** | this repo | Soroban contracts |
+
+```bash
+git clone https://radicle.consulting-manao.com/z2CDTfvUguLG3UboK46HyYxoxg1og.git chimpdao-nfc-bridge
+```
+
+## Prerequisites
+
+- **Hardware**: Infineon SECORA chip + Identiv/uTrust USB reader
+- **Software**: Node.js ≥ 22 for the bridge; Bun for the terminal
+- **Wallet**: Freighter or compatible Stellar wallet
+
+## Running
+
+```bash
+# Terminal 1: NFC bridge (Node only — not Bun)
+cd chimpdao-nfc-bridge
+npm install && npm start
+
+# Terminal 2: the POS
+cd ../chimpdao-terminal
+bun install && bun run dev
+```
+
+Card setup — purse, mint, assign, tag link — is **Set up a card** in the terminal.
+
+If the chip was already on the reader when the bridge started, **lift and retap**.
+
+## Architecture
+
+```
+Browser ← WebSocket → chimpdao-nfc-bridge ← nfc-pcsc → USB Reader ← NFC → Chip
+```
+
+Protocol: `status` | `read-pubkey` | `sign` | `read-ndef` | `write-ndef` | `generate-key` | `fetch-key`
+
+Full spec: [chimpdao-nfc-bridge/docs/PROTOCOL.md](https://radicle.consulting-manao.com/z2CDTfvUguLG3UboK46HyYxoxg1og.git) (clone the bridge repo).
+
+### Stellar flow
+
+The client no longer builds its own message — the digest the chip signs is derived from
+the call itself, so a signature cannot be moved to a different one.
+
+**Pocket (the chip is the account):**
+
+1. Read the chip public key (65-byte SEC1)
+2. Build the operation (e.g. a SAC `transfer`) and simulate it
+3. Take the host's authorization payload from the prepared auth entry
+4. Chip signs that 32-byte payload
+5. Recover the recovery id (`@noble/secp256k1`), inject `ChipAuth` as the credential
+6. Re-simulate in `enforce` mode so the footprint covers `__check_auth`, then submit
+
+**nfc-nft (the chip is a presence proof beside a wallet):**
+
+1. Read the chip public key and the chip's nonce on the contract
+2. Build `call_digest(domain, contract, fn, args, nonce)` — see `src/chain/chip-auth.ts`
+3. Chip signs it; submit alongside the wallet's own authorization
+
+A cross-client test pins the TypeScript `callDigest` against the Rust implementation; if
+they ever diverge every attestation is rejected on-chain with an opaque contract error.
+
+### Merchant terminal (XRPL)
+
+```bash
+git clone https://radicle.consulting-manao.com/z4Y793TkQB4X4Uz4CRdEMUHxakZKt.git chimpdao-terminal
+```
+
+## Signature format
+
+- **From chip**: DER-encoded ECDSA
+- **From bridge**: `r` + `s` as 32-byte hex (low-S)
+- **Terminal**: `chipAuthForDigest()` in `src/chain/chip-auth.ts`
+
+Contract tests cover digest construction and rejection paths only; a valid signature is
+proven on live hardware, not simulated. `cargo test -p chimpdao-chip-auth` pins the
+digest the terminal must reproduce.

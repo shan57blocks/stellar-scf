@@ -1,0 +1,387 @@
+Source: https://docs.google.com/document/d/1qlIGWzJgLmgjEbMUbREtkkznDJ63WtN5/edit?usp=sharing&ouid=104309477609059973990&rtpof=true&sd=true
+
+
+This document is the engineering companion to the SCF application. It describes Authline: an asset-agnostic standard plus reference implementation that lets a third party (an exchange, broker, or wallet) establish an authorized trustline for its user, so that receiving or withdrawing a Stellar classic asset no longer dead-ends in a blocked transfer and a "trustline" error the user must resolve alone.
+Authline is, deliberately, not just an end-user page. The RFP core is a third party onboarding a user into an asset during a withdrawal. The end-user Authline dApp is the reference recipient-side activation UI, one reference consumer / hosted-redirect target, not the whole product. The product is a standard + an on-chain onboard router + an integrator SDK + a hosted relayer + a reference exchange-withdrawal integration, organized around a four-tier integration ladder (§3) so a platform can adopt at the effort level it can afford today and upgrade later.
+Everything below is built in the canonical public repo github.com/theahaco/authline (Apache-2.0; reference dApp live on testnet at testnet.authline.io). One precursor is LIVE on mainnet today: the eurcv_auth denylist authorizer (CB2DHZMQHQE3TGUMD6BRM7UCJZNIPKDRVEQOWBIRRS3G2FZOGDTRKSB3), built by this team for SG-Forge's EURCV stablecoin, with the eurcv.theaha.co activation page. Authline generalizes that single-asset engagement into the asset-agnostic standard this grant delivers: the onboard router with on-chain capability discovery, the policy Authorizer (denylist + allowlist), the @theaha/authline SDK, the Authline dApp, the hosted relayer, claimable-balance delivery, the test suite, the SEP, and mainnet deployment + adoption.
+
+The stack in plain English. Two small Soroban (Rust) smart contracts on Stellar: a stateless onboard router that creates and, where the asset supports it, authorizes, a trustline in one call, and a per-asset Trustline Authorizer policy contract that the issuer installs as its asset’s SAC admin. One TypeScript SDK (@theaha/authline) that an exchange or wallet imports to build the three transaction shapes and read activation state. One static web app, the activation page, built with Vite + React and deployed straight from this repo; it has no backend. And one optional convenience: the relayer, a small self-hostable Docker service exposing two HTTP endpoints for platforms that do not want to touch a Stellar SDK at all. Everything trust-critical is on-chain or client-side, and everything runs on the current stable Stellar stack, Protocol 26 (CAP-73, CAP-68), soroban-sdk 26, @stellar/stellar-sdk, and Stellar Wallets Kit.
+
+1. System Overview
+A classic Stellar issued asset cannot be held or received until the holder has a trustline for it, a CHANGE_TRUST ledger subentry that costs +0.5 XLM in min-balance reserve. For a regulated AUTH_REQUIRED asset (e.g. EURCV), the trustline must additionally be authorized by the issuer (or the issuer's delegate) before any balance can move.
+Today this surfaces to the user as a failure, not a flow: the withdrawal or transfer is blocked or errors out (op_no_trust), at best with a message telling them to open a "trustline", a term disconnected from whatever they were actually trying to do (withdraw EURC from an exchange, receive a tokenized security, get paid). Resolving it is left to the user in their own wallet: they do not know what a trustline is, do not know they need 0.5 XLM they may not have, and for regulated assets cannot complete the flow at all until some off-ledger party authorizes them.
+Authline closes that gap by letting the third party that initiated the flow do everything the protocol does not strictly require the user to do.
+1.1 The invariant (stated openly, it is a strength)
+Creating a trustline always requires the user's own signature. A CHANGE_TRUST operation (classic) or a CAP-73 trust() invocation (Soroban) is authorized by the trustor, the account that will hold the asset. No third party can create a trustline on a non-custodial user's account. (Appendix A surveys every live and announced protocol mechanism and confirms this floor.)
+Authline does not pretend otherwise. Instead it treats this as the one irreducible user action and removes everything else from the user's path:
+Step
+Who must do it
+Pay the 0.5 XLM trustline reserve
+Third party on the default paths, CAP-33 sponsorship in Case B (sponsored CreateAccount if new) and Tier-2 claimable-balance delivery; the holder only on the one-Soroban-transaction router path (Case C, CAP-73 has no sponsorship)
+Create the trustline
+User, one signature (irreducible)
+Authorize on behalf (AUTH_REQUIRED only)
+Third party / the router, permissionless on-chain, no user signature, no issuer signature
+Orchestrate the transaction
+Third party, build, simulate, submit, fund fees
+The net effect: the user is reduced to at most one in-flow signature, and in the common AUTH_REQUIRED case (an already-existing unauthorized trustline, Case A) to zero. Every other step, funding, sponsorship, authorization, transaction assembly, submission, is carried by the integrator. That is the whole of the value proposition, and it is honest about its one limit.
+1.2 What "open a trustline for a user" actually means
+
+The diagram shows who does what, not the wire protocol: in the canonical handoff the sponsor pre-signs, the user's wallet signs and submits, and the third party confirms by polling getActivationStatus(), no signed-XDR return channel (§6.2).
+1.3 The design pivot: capability discovery moved on-chain
+Earlier designs of this problem (including our own first sketches) put the open-vs-regulated branching in the client: the SDK probed the issuer's auth_required flag and chose between a "plain trust" builder and a "trust + authorize" builder. That pushes a correctness-critical decision into every integrator's stack, and it breaks silently when an issuer flips a flag or migrates its authorizer.
+Authline's architecture instead centralizes the branch on-chain, in one stateless router contract (§5.1): onboard(sac, holder) creates the trustline via CAP-73 trust(), discovers the asset's SAC admin via CAP-68 admin(), and, if that admin is a contract exporting authorize_trustline, calls it atomically, all under a single holder signature. Integrators and the dApp call one method with two arguments and read back a typed OnboardStatus. No client ever branches on asset class; the ledger is the source of truth.
+
+2. Two asset classes and three cases
+A single behaviour for "all classic assets" would be wrong. Authline serves both classes under one interface, the router discovers the class on-chain (§1.3, §5.1), and the SDK's curated registry carries a capability tag (open / permissionedOneStep / permissionedManual) so UIs can set user expectations before any transaction is built.
+2.1 The two asset classes
+Class
+Examples
+auth_required?
+Onboarding work
+Authorizer needed?
+Open (the majority)
+USDC, EURC
+No
+Trustline only. Router path: one onboard(sac, holder) call → TrustlineOnly (nothing to authorize). Sponsored path: third party builds + sponsors a ChangeTrust. User signs once.
+No
+Regulated (AUTH_REQUIRED)
+EURCV
+Yes
+Trustline plus authorization. Router path: the same onboard(sac, holder) call → the router discovers the authorizer (the SAC admin) and calls it atomically → Authorized. Or: ChangeTrust (user, once) plus authorize-on-behalf (third party, permissionless).
+Yes (the SAC admin)
+For the majority of assets there is no authorize step and the value is reserve-free one-tap trustline establishment plus the handoff. The Authorizer and authorize-on-behalf machinery is the regulated-asset value, and it is where this team's live precursor (eurcv_auth) already operates on mainnet.
+2.2 The three cases
+Step 0, before any case: if the withdrawal destination is a muxed M-address, the receiver is a custodial platform, no trustline is needed, a plain payment settles it, and Authline is out of scope. The selection rule in the SEP starts there.
+The user's starting state then determines how much they must do. All three cases are handled by the SDK; every row names who pays the 0.5 XLM reserve.
+Case
+Starting state
+User signatures
+Reserve paid by
+Path
+A
+Account exists and already has an unauthorized trustline (common for AUTH_REQUIRED)
+0
+No reserve involved (trustline already exists)
+Third party submits permissionless authorize-on-behalf (buildAuthorizeTx), any funded account may be the transaction source and fee payer. Nothing for the user to sign.
+B
+No trustline, or a brand-new / zero-XLM account
+1
+Integrator/sponsor (CAP-33 sponsorship)
+Third party builds a sponsored ChangeTrust (buildSponsoredOnboardTx; sponsored CreateAccount if the account does not exist). User signs once. Then, if AUTH_REQUIRED, authorize-on-behalf.
+C
+Funded account, no trustline
+1
+Holder (0.5 XLM, CAP-73 has no sponsorship)
+One Soroban transaction through the onboard router (buildOnboardTx → onboard(sac, holder)): trustline created (CAP-73 trust) and, if the router discovers a one-step authorizer, authorized, under a single user signature.
+
+Case B is the sponsor-side workhorse. Whenever a sponsor is available and the recipient may be a brand-new, zero-XLM account, the SDK selects the CAP-33 sponsored path (selectBackend returns cap33-sponsored), because the integrator pays the reserve. Case C is the self-custody golden path: selectBackend prefers cap73-one-signature when the router is pinned for the network and the holder already controls a funded on-ledger account, one Soroban transaction, one signature, on-chain discovery, and the holder funds the 0.5 XLM reserve (CAP-73's trust() cannot be sponsored). Case A is the cheapest of all and is the steady-state for an AUTH_REQUIRED asset whose users were provisioned with trustlines earlier. Claimable-balance delivery (§9.1) is Case B deferred to claim time, the same sponsored sandwich, riding the claim transaction.
+
+3. The integration ladder
+Integration effort is the #1 adoption risk this project faces, and the ladder is the structural answer: four tiers, each one an upgrade path to the next. A platform does not have to adopt the full SDK to stop losing withdrawals, Tier 0 costs zero code, Tier 1 is ~20 lines of HTTP in any language, Tier 2 is a 20–50-line operation swap on the platform's existing hot key. Tier 3 is the destination, not the entry fee.
+Tier
+What the platform does
+Effort
+New keys
+What the user gets
+0, Link-out
+Adds the hosted Authline activation URL to its withdrawal error path / help docs
+One URL template, zero code
+None
+A guided activation page instead of a dead-end error
+1, Relayer
+Calls the hosted relayer HTTP API pre-payout: GET /status, and for Case A POST /authorize
+~20 lines, no Stellar SDK, any language
+None
+Case A users (existing unauthorized trustline) are authorized before the payout can fail, zero signatures
+2, Claimable-balance delivery
+Swaps Payment → CreateClaimableBalance when the destination lacks a trustline
+20–50 lines, same hot key, no new accounts
+None
+The withdrawal never fails; the user claims on the activation page (one deferred signature for open assets)
+3, Full SDK (inline)
+Integrates @theaha/authline, the §6.2 recipe
+Full SDK integration
+Sponsor key
+One in-flow signature, zero in Case A, the best UX
+
+
+
+
+
+
+
+
+
+
+
+
+Every tier terminates in the same place: an authorized trustline and a delivered asset, with the same Authorizer enforcing the same on-chain policy. The ladder changes who does the work and when, not the end state.
+3.1 The relayer (Tranche 2)
+The relayer is a small named component, hosted by us, or self-hosted from a Docker image, that wraps two things behind plain HTTP:
+	•	GET /status?account=…&asset=… , the SDK's getActivationStatus() (has trustline? authorized?), so a platform can gate payouts without a Stellar SDK.
+	•	POST /authorize, the permissionless Case A authorize-on-behalf. Any funded key may be the Soroban transaction source and fee payer; here it is the relayer's own ops key, so the platform needs no Stellar key at all at Tier 1.
+The relayer also quarantines the P26 JS-decode gap (§8.2): the interim Rust CLI sidecar for the authorize flag-write lives in one hosted binary, not in every integrator's stack. Delivered in Tranche 2 with a runbook.
+
+4. Quickstart: the 40-line integration
+This section is the first thing an integrator's engineering team should read.
+Tier 1, no SDK, any language. Two HTTP calls against the relayer (hosted, or your own Docker instance):
+# Pre-payout: is the destination ready to receive the asset? curl "https://relayer.<host>/status?account=GUSER...&asset=EURCV:GCEYGIVOLAVBF2TG2RUSGTUJCIN75KEX3NGLMY4VPL4GFE5L355AXW3G" # → { "hasTrustline": true, "isAuthorized": false }  # Case A (existing unauthorized trustline): authorize on-behalf. # Permissionless, no user signature, no issuer signature; the relayer's # ops key is the transaction source and fee payer. curl -X POST "https://relayer.<host>/authorize" \   -d '{ "account": "GUSER...", "asset": "EURCV:GCEY..." }' # → { "status": "authorized" }  # If hasTrustline is false: either link out to the activation page (Tier 0) # or swap your Payment for a CreateClaimableBalance (Tier 2, §9.1).
+Tier 3, the condensed inline recipe (the annotated version, with the pre-sign handoff pattern, is §6.2):
+import { discoverOnboarder, getActivationStatus,          buildSponsoredOnboardTx, buildAuthorizeTx,          reconcileWithRegistry } from "@theaha/authline";  const config = reconcileWithRegistry(                       // anti-copycat check   await discoverOnboarder("eurcv.theaha.co"), net);         // issuer stellar.toml const st = await getActivationStatus({ rpcUrl, account: user, ...config });  if (!st.hasTrustline) {                                     // Case B, sponsor pays reserve   const xdr = await buildSponsoredOnboardTx({     horizonUrl, networkPassphrase, sponsor: exchange, user, config,     createUserAccount: true,                                // if not on ledger   });   // sponsor signs FIRST (signature set is unordered), short timebounds,   // hand the SEP-7 URI to the user's wallet, then poll getActivationStatus(). } if (config.authorizer && !st.isAuthorized) {                // Case A, zero user signatures   const xdr = await buildAuthorizeTx({     rpcUrl, networkPassphrase, source: exchange, account: user, config,   });   // exchange (or the relayer) signs with `source` and submits. }
+Confirmation is always by polling ledger state (getActivationStatus()); no signed-XDR return channel is ever required.
+
+5. On-chain architecture
+Two Soroban contracts, plus a testnet stub. The onboard router (§5.1) is the standard's single on-chain entry point, stateless, immutable, one deployment per network. The Trustline Authorizer (§5.2) is the per-asset policy contract, an asset-agnostic generalization of the live eurcv_auth, that the issuer installs as the asset's SAC admin. The Authorizer follows the Aha team's Contract Admin SEP (theahaco/admin-sep) for the admin / set_admin / upgrade surface; the router deliberately has no admin surface at all (§5.1).
+5.1 The onboard router, onboard(sac, holder) with on-chain discovery
+The router is the heart of the design pivot (§1.3): a stateless, immutable, per-network singleton through which every one-signature onboarding flows, for both asset classes, with no client-side branching.
+#[contractimpl] impl TrustlineOnboard {     /// Create — and, where the asset supports it, authorize — `holder`'s     /// trustline for the asset behind `sac`. One signature (the holder's).     pub fn onboard(env: Env, sac: Address, holder: Address)         -> Result<OnboardStatus, Error>     {         holder.require_auth();         let sac_client = StellarAssetClient::new(&env, &sac);         // 1. CAP-73 (Protocol 26): create the trustline (idempotent; the         //    holder pays the 0.5 XLM reserve, CAP-73 has no sponsorship).         sac_client.try_trust(&holder).map_err(|_| Error::TrustFailed)??;         // 2. CAP-68: discover the asset's admin on-chain.         let admin = sac_client.admin();         // 3. If the admin is a contract exporting `authorize_trustline`,         //    call it atomically; otherwise the trustline stands alone.         match try_authorize(&env, &admin, &holder) {             Authorized      => { /* post-condition below */ }             NoOneStepIface  => return Ok(OnboardStatus::TrustlineOnly),             TypedRejection  => return Err(Error::AuthorizationRefused), // tx ROLLS BACK         }         // 4. Post-condition: the ledger must agree.         if !sac_client.authorized(&holder) { return Err(Error::NotAuthorized); }         Ok(OnboardStatus::Authorized)     } }  #[contracttype] pub enum OnboardStatus { Authorized, TrustlineOnly }  #[contracterror] #[repr(u32)] pub enum Error {     NotSac = 1,               // target is not a built-in Stellar Asset Contract     TrustFailed = 2,          // CAP-73 trust() failed (reserve, missing account, …)     AuthorizationRefused = 3, // the discovered authorizer rejected (typed error) — rolled back     NotAuthorized = 4,        // authorizer claimed success but the ledger disagrees }
+The semantics worth a reviewer's attention:
+	•	One method, two arguments. The caller passes sac and holder, not an authorizer address. The router discovers the authorizer from the ledger (SAC.admin(), CAP-68), so a spoofed or stale authorizer address can never be injected by a client, and an issuer can migrate its authorizer without breaking a single integrator.
+	•	Typed vs. untyped failure is the protocol. A typed contract error from the discovered authorizer means policy rejection, the entire invocation, including the just-created trustline, rolls back (AuthorizationRefused). An untyped abort (the admin is a plain G-account issuer, or a contract without the authorize_trustline export) means no one-step interface exists, the trustline is kept and the router returns TrustlineOnly, leaving authorization to the issuer's off-platform process. Open assets naturally land on TrustlineOnly with a usable trustline.
+	•	A trust-but-verify post-condition. Even when the authorizer reports success, the router re-reads sac.authorized(holder) and fails with NotAuthorized if the ledger disagrees, no authorizer can lie its way to a green status.
+	•	Stateless and immutable by design. The router holds no storage, no admin, no upgrade hook. There is nothing to govern, pause, or compromise; a bug is fixed by deploying a successor and updating the pinned registry entry. Per-network router ids are pinned in the SDK's ROUTERS table (§6.1).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+5.2 Trustline Authorizer
+An asset-agnostic generalization of the live eurcv_auth contract. The issuer of an AUTH_REQUIRED classic asset sets this contract as the admin of the asset's Stellar Asset Contract (SAC) via SAC.set_admin(authorizer), in a separate issuer-signed step. This delegates the authorize-on-behalf decision to predictable, auditable on-chain policy instead of an off-ledger signer that must co-sign every transaction (the SEP-8 model). Because the router discovers the SAC admin on-chain (§5.1), installing the Authorizer instantly makes the asset one-step-onboardable for every integrator, no announcements, no config pushes.
+
+The authorization entrypoint is permissionless (matching eurcv_auth): anyone can trigger it, but the policy is re-checked on every call, so a banned (denylist) or not-allowed (allowlist) account is never authorized.
+The interface splits into two profiles. The Core profile is REQUIRED, it is the authorization machine:
+#[contract] pub struct TrustlineAuthorizer;  #[contractimpl] impl TrustlineAuthorizer {     /// Issuer must, in a separate issuer-signed step, set this contract as the     /// SAC admin (`SAC.set_admin(this)`).     pub fn __constructor(env: Env, admin: Address, sac: Address, policy: Policy);      // --- authorization (permissionless self-service) ----------------------     /// Permissionless. Re-checks policy on every call; the contract (the SAC     /// admin) authorizes via `SAC.set_authorized(account, true)`. Rejections     /// are TYPED errors, so the router rolls the whole onboarding back (§5.1).     pub fn authorize_trustline(env: Env, account: Address) -> Result<(), Error>;     /// Admin: revoke authorization without banning the holder.     pub fn deauthorize_trustline(env: Env, account: Address);      // --- denylist + freeze ------------------------------------------------     /// Admin: ban also DEAUTHORIZES, so a retried onboarding cannot re-authorize.     pub fn ban(env: Env, accounts: Vec<Address>);     pub fn unban(env: Env, accounts: Vec<Address>);     pub fn freeze(env: Env, accounts: Vec<Address>);   // = ban + deauthorize     pub fn unfreeze(env: Env, accounts: Vec<Address>); // = unban + re-authorize      // --- allowlist (gated policy) -----------------------------------------     pub fn allow(env: Env, accounts: Vec<Address>);     pub fn disallow(env: Env, accounts: Vec<Address>); // also deauthorizes      // --- pause / admin (admin-sep) ----------------------------------------     pub fn pause(env: Env);     pub fn unpause(env: Env);     pub fn admin(env: Env) -> Address;     pub fn set_admin(env: Env, new_admin: Address);     pub fn upgrade(env: Env, wasm_hash: BytesN<32>);      // --- views ------------------------------------------------------------     pub fn policy(env: Env) -> Policy;     pub fn sac_address(env: Env) -> Address;     pub fn is_banned(env: Env, account: Address) -> bool;     pub fn is_allowed(env: Env, account: Address) -> bool;     pub fn is_paused(env: Env) -> bool; }
+The Treasury profile is OPTIONAL, for issuers that also delegate supply operations (MiCA: the issuer must be able to mint and claw back):
+// OPTIONAL Treasury profile, only for issuers delegating supply operations. pub fn mint(env: Env, to: Address, amount: i128); pub fn clawback(env: Env, from: Address, amount: i128);
+Governance note, delegating SAC admin surrenders nothing classic. The issuer account retains its classic-side powers, SetTrustLineFlags (freeze/deauthorize at the trustline level) and the classic clawback operations, regardless of who holds SAC admin. Delegating SAC admin adds an on-chain authorizer; it does not remove the issuer's classic controls. An issuer can adopt the Core profile only, keep mint/clawback on its own keys, and still get permissionless authorize-on-behalf.
+The policy is per-asset:
+#[contracttype] pub enum Policy {     /// Default, frictionless: auto-authorize any holder that is not banned.     /// The EURCV model, open by default, compliance acts by exception.     Denylist,     /// Gated: authorize only holders explicitly allowed first     /// (e.g. tokenized securities requiring per-user KYC).     Allowlist, }
+Freeze = ban + deauthorize. Implementing freeze on top of ban (which also calls SAC.set_authorized(account, false)) is a security choice: a retried onboarding, through the router or a repeated permissionless authorize_trustline call, can never silently re-authorize a frozen holder, because the policy check rejects a banned account before any set_authorized(.., true).
+The error variants are typed and surfaced to callers, this is load-bearing: a typed rejection is exactly what makes the router roll the whole onboarding back (§5.1):
+#[contracterror] #[repr(u32)] pub enum Error { Paused = 1, AccountBanned = 2, AccountNotAllowed = 3 }
+For testnet integration before an issuer installs the full policy contract, the repo also carries a deliberately minimal authorizer stub, __constructor(sac) + a permissionless authorize_trustline(account) that flips set_authorized with no policy, used to exercise the router's discovery and rollback semantics against a real AUTH_REQUIRED test asset.
+Audit events
+Every state transition publishes a structured event (soroban-sdk 26 #[contractevent], event name as first topic, account indexed). Indexers (e.g. a MiCA audit log) consume these to reconstruct the full authorization history off-chain:
+Authorized{account}   Deauthorized{account} Banned{account}       Unbanned{account} Allowed{account}      Disallowed{account} Paused{}              Unpaused{}
+
+6. Integrator SDK
+@theaha/authline (TypeScript) is the surface a Tier-3 integrator imports. It ships the classic flows (sponsored trustline, activation status, SEP-7) in pure JS; the on-chain authorize-on-behalf has one upstream caveat documented in §8.2. The SDK is structured so an integrator never has to reason about asset classes directly, the router discovers capability on-chain (§5.1), the registry carries the capability tag for UI copy, and selectBackend picks the path.
+It also ships a curated, issuer-pinned registry (OFFICIAL_ASSETS / resolveOfficialAsset, "never resolve an asset by code alone", the anti-copycat defense) with load-time StrKey validation (validateOfficialAsset, isValidIssuer, isValidContractId), reconcileWithRegistry (rejects a discovered stellar.toml whose advertised issuer/SAC/router do not match the pinned values, the enforcement half of that defense), a per-network ROUTERS table pinning the onboard router ids, and a capability model (open / permissionedOneStep / permissionedManual); the dApp surfaces a clawback/freeze warning for clawback-capable assets.
+6.1 Core surface
+// ── read state ──────────────────────────────────────────────────────────── function getActivationStatus(args: { rpcUrl; account; config })   : Promise<{ hasTrustline: boolean; isAuthorized: boolean;               isAuthorizedToMaintainLiabilities: boolean; sacAuthorized? }>; // (also exported under the alias `status`)  // ── discovery ───────────────────────────────────────────────────────────── function discoverOnboarder(domain: string, opts?: DiscoverOptions)   : Promise<OnboarderConfig | null>;            // stellar.toml [TRUSTLINE_ONBOARDER] function parseOnboarderToml(toml: string): OnboarderConfig | null;  // ── registry (curated, issuer-pinned, the anti-copycat defense) ──────────── const OFFICIAL_ASSETS: OfficialAsset[];          // USDC, EURC, EURCV, BLND, … const ROUTERS: Partial<Record<StellarNet, string>>;  // pinned router per network function resolveOfficialAsset(code: string, net: StellarNet): OfficialAsset; function assetsForNetwork(net: StellarNet): OfficialAsset[]; function reconcileWithRegistry<T>(config: T, net: StellarNet): T;  // throws on mismatch function netFromPassphrase(passphrase: string): StellarNet;  // ── Case C: the router one-signature path (both asset classes) ────────────── // One Soroban tx via the router: trust + on-chain discovery + authorize. // The HOLDER pays the 0.5 XLM reserve (CAP-73 has no sponsorship). function buildOnboardTx(opts: { rpcUrl; networkPassphrase; holder; config })   : Promise<string>;                             // unsigned base64 XDR function decodeOnboardStatus(retval: xdr.ScVal)   : "Authorized" | "TrustlineOnly";              // typed router result  // ── Case B: reserve-free classic onboarding (CAP-33 sponsored ChangeTrust) ── // Integrator (`sponsor`) pays the 0.5 XLM reserve; optional sponsored // CreateAccount for a brand-new account. Returns unsigned base64 XDR. function buildSponsoredOnboardTx(opts: {   horizonUrl; networkPassphrase; sponsor; user; config; createUserAccount? }): Promise<string>;  // ── Case A (regulated): permissionless authorize-on-behalf (Soroban) ──────── // Any funded `source` may be the transaction source and fee payer, the // integrator's ops key or the hosted relayer's. No user signature, no // issuer signature. function buildAuthorizeTx(opts: {   rpcUrl; networkPassphrase; source; account; config }): Promise<string>;  // ── Tier 2: claimable-balance delivery (Tranche 2 deliverable) ────────────── // Withdrawal side: swap Payment → CreateClaimableBalance, adding the platform // as a second claimant behind a reclaim predicate (default 30 days). The // platform (creator) fronts the CB entry reserve, refunded when claimed. function buildClaimableBalanceTx(opts: {   horizonUrl; networkPassphrase; source; destination; amount; config;   reclaimAfterDays? }): Promise<string>; // Claim side (open assets): the one-tx golden path, sponsored ChangeTrust // (limit ≥ amount) + ClaimClaimableBalance, ONE holder signature; the sponsor // pre-signs and pays the trustline reserve. See §9.1. function buildClaimTx(opts: {   horizonUrl; networkPassphrase; sponsor; holder; balanceId; config }): Promise<string>;  // ── handoffs: turn an unsigned tx into the three forms shown to the user ──── function onboardingRequest(opts: { txXdr; networkPassphrase; userAddress; … })   : { sep7Uri: string; deepLink: string; hostedUrl?: string };  // ── backend selection ─────────────────────────────────────────────────────── // `cap73-one-signature` (the router) when the router is pinned for the network // AND the holder controls a funded, on-ledger account, the holder pays the // reserve. Otherwise `cap33-sponsored`, covers brand-new / zero-XLM accounts, // the sponsor pays. function selectBackend(config: { router?; backends },                        holder: { exists; fundedForReserve })   : "cap73-one-signature" | "cap33-sponsored";
+The resolved config carries the asset, SAC, the per-network router, the (informational) authorizer, and the issuer's supported backends:
+interface OnboarderConfig {   assetCode: string; assetIssuer: string;   // classic asset   sac: string;                              // Stellar Asset Contract (C…)   router?: string;                          // the onboard router — pinned per network   authorizer?: string;                      // SAC admin; INFORMATIONAL for the router                                             // path (discovered on-chain), required                                             // only for the Case-A buildAuthorizeTx   backends: ("cap73-one-signature" | "cap33-sponsored")[]; }
+Note what is absent, on purpose: there is no buildTrustTx and no assetAuthRequired in the surface. Both existed in earlier designs and were removed by the router pivot (§1.3), open and regulated assets share buildOnboardTx, and the open/regulated branch lives on-chain, not in the client.
+For dApp builders the package also ships a headless React layer (@theaha/authline/react): a useActivation hook driving the full state machine (idle → building → signing → submitting → success | error, with trustlineOnly surfaced separately) and a minimal ActivateButton. The Tranche-2 issuer admin CLI wraps the Authorizer's admin surface (deploy, set-as-SAC-admin, ban/unban, allow/disallow, freeze/unfreeze, pause, mint/clawback, upgrade) so an issuer can operate the contract without writing Soroban calls by hand.
+6.2 The exchange recipe (Tier 3, Case B, the withdrawal workhorse)
+This is the Tier-3 integration: the full inline UX, with the integrator holding a sponsor key.
+import {   discoverOnboarder, getActivationStatus, reconcileWithRegistry,   buildSponsoredOnboardTx, buildAuthorizeTx, netFromPassphrase, } from "@theaha/authline";  // 0. Discover the issuer's onboarder config once (or hold it locally), and //    ALWAYS reconcile it against the pinned registry before building anything. const net = netFromPassphrase(networkPassphrase); const config = reconcileWithRegistry(   await discoverOnboarder("eurcv.theaha.co"), net);  // 1. Read the user's state. const st = await getActivationStatus({ rpcUrl, account: user, config });  // 2. If no trustline: integrator builds a SPONSORED ChangeTrust (pays the //    reserve; sponsored CreateAccount when the account is brand-new). User //    signs ONCE. (Case B) if (!st.hasTrustline) {   const xdr = await buildSponsoredOnboardTx({     horizonUrl, networkPassphrase, sponsor: exchange, user, config,     createUserAccount: /* account not on ledger */ true,   });   // PRE-SIGN: sign with `sponsor` FIRST, set ~15-min timebounds, then hand   // the SEP-7 URI to the user's wallet; confirm by polling getActivationStatus(). }  // 3. If the asset has an authorizer and the user is not yet authorized: //    integrator authorizes on-behalf. No user signature, no issuer signature. //    Any funded key may be the tx source and fee payer. (Case A / tail of B) if (config.authorizer && !st.isAuthorized) {   const xdr = await buildAuthorizeTx({     rpcUrl, networkPassphrase, source: exchange, account: user, config,   });   // exchange signs with `source` and submits. }
+The signers on the sponsored XDR are exactly sponsor (the BEGIN_SPONSORING_FUTURE_RESERVES) and user (the CHANGE_TRUST and END_SPONSORING_FUTURE_RESERVES, which the SDK sets with source: user). That is the protocol-minimal split: the integrator pays, the user authorizes the subentry on their own account.
+The handoff is one-way, pre-sign, then poll. Signatures on a classic transaction envelope are an unordered set checked against thresholds at apply time, so the sponsor signs before the handoff, sets short timebounds (~15 minutes), and hands the user a SEP-7 URI. The user's wallet adds the one missing signature and submits. The integrator confirms completion by polling getActivationStatus(), ledger state, not a return channel. No signed-XDR return path is ever needed. SEP-7 does define an optional callback parameter (a POST of the signed XDR) that can serve as a return channel where the wallet supports it, treat it as an optimization, never a dependency.
+6.3 The reference exchange-withdrawal demos
+examples/exchange-withdrawal/ carries two runnable Stellar-testnet demos that generate fresh keypairs at every run (no committed secrets):
+	•	demo.mjs, the regulated (AUTH_REQUIRED) path, Case B. Generates exchange + user keypairs, funds the exchange via friendbot, and establishes an authorized trustline for a brand-new, zero-XLM user, the exchange paying the reserve (CAP-33 sponsorship) and authorizing on the issuer's behalf (permissionless authorize_trustline, no issuer signature), with the user signing exactly once.
+	•	demo-open.mjs, the open-asset path (testnet USDC): a CAP-73 trustline through the router, one holder signature, no authorize step, pure JS end to end.
+Both demos print every transaction hash so a reviewer can verify each run on Stellar Expert (testnet).
+6.4 The Authline dApp, the recipient-side activation UI
+The reference consumer of all of the above: a Vite + React + TypeScript dApp (src/, live on testnet at testnet.authline.io; mainnet precursor: eurcv.theaha.co) with two surfaces, a landing page and the activation app. The activation app is config-driven and multi-asset: an asset directory built from the pinned registry (assetsForNetwork), capability-aware UI copy (open / permissionedOneStep / permissionedManual), a clawback/freeze risk warning for clawback-capable assets, and wallet integration via Stellar Wallets Kit (Freighter, xBull, Albedo, LOBSTR, Hana). The activation flow drives useActivation → buildOnboardTx → wallet sign → submit → decodeOnboardStatus, and renders TrustlineOnly honestly ("trustline created, the issuer authorizes off-platform") rather than pretending success. A window.__AUTHLINE_E2E__ injected-signer seam lets the Playwright e2e suite (§ test plan, APPLICATION.md D2.3) exercise the real flow in a real browser against real testnet RPC with no wallet extension. The Tier-2 claim flow (§9.1) lands on this same page.
+
+“Open source and customizable”, the RFP’s landing-page requirement, literally. Three adoption paths, in increasing order of effort. (1) Link out to the hosted page: ?asset= preselects the asset and ?address= prefills the destination account, so a platform’s withdrawal-error path can deep-link a user straight into the right activation flow, this is Tier 0’s URL template. (2) Fork and re-brand: the dApp is a small static Vite + React build under Apache-2.0; the asset directory is driven by the pinned registry, so a broker swaps branding and copy without touching flow logic. (3) Self-host the identical build on its own domain, the repo ships both deploy workflows (dapp-pages.yml for GitHub Pages, dapp-ipfs.yml for IPFS). All three paths run the same activation flow against the same router and Authorizer: customization never forks the trust model.
+7. Discovery, SEP relationship, admin-sep, CAP-73
+7.1 Discovery, one issuer config, universal interop
+An issuer publishes a single [TRUSTLINE_ONBOARDER] block in its domain's stellar.toml (SEP-1, /.well-known/stellar.toml). Any integrator auto-discovers it with discoverOnboarder(domain), every advertised address is StrKey-validated at parse time, and reconcileWithRegistry then rejects any block whose pinned ids do not match, and immediately has everything needed to onboard a user, no bilateral deals.
+[TRUSTLINE_ONBOARDER] VERSION         = "0.3" ASSET_CODE      = "EURCV" ASSET_ISSUER    = "GCEYGIVOLAVBF2TG2RUSGTUJCIN75KEX3NGLMY4VPL4GFE5L355AXW3G" SAC             = "C…"   # the asset's Stellar Asset Contract AUTHORIZER      = "C…"   # informational, the router discovers the SAC admin                          # on-chain; required only for Case-A authorize-on-behalf ONBOARD_WRAPPER = "C…"   # the onboard router for this network BACKENDS        = ["cap73-one-signature", "cap33-sponsored"]
+
+Discovery and the on-chain router are complementary, not redundant: the stellar.toml block answers "how does this issuer want users onboarded?" (backends, sponsor availability, the hosted page) before any transaction exists, while CAP-68 admin() discovery answers "who actually authorizes this asset?" at execution time, from the ledger. The client never has to trust the toml for the security-critical part.
+Contrast with today. Issuers of AUTH_REQUIRED assets currently authorize each new trustline by hand (SetTrustLineFlags per holder), or run a SEP-8 approval server that must co-sign every transaction an authorized holder submits. Authline instead delegates the authorization decision once to a permissionless on-chain contract: after SAC.set_admin(authorizer), the issuer never has to be online, never co-signs, and the policy is auditable on-ledger.
+7.2 SEP relationship
+Authline is being written up as SEP-XXXX: Trustline Onboarder (Track: Standard; Status: Draft; v0.3 in the repo at sep/SEP-XXXX-trustline-onboarder.md). The SEP specifies the roles, the two asset classes and their on-chain detection, the Trustline Authorizer interface, the onboard router and its discovery/rollback semantics (typed error = rejection + rollback; untyped abort = TrustlineOnly), the two backends and the selection rule, the three cases, the [TRUSTLINE_ONBOARDER] discovery block, the integrator interface (SEP-7 URI / deep link / hosted redirect / audit-event trail), and  (from Tranche 2) the claimable-balance delivery pattern. It builds on the Contract Admin SEP and references CAP-73. The SEP number is a placeholder (SEP-XXXX) pending assignment.
+7.3 admin-sep and CAP-73 / CAP-68
+	•	admin-sep (theahaco/admin-sep; authors Willem Wyndham, Gleb Zernov; SDF discussion #1670) defines the admin / set_admin / upgrade surface the Trustline Authorizer implements. Reusing it means issuers and tooling already understand the admin model. (The router, by contrast, is deliberately admin-free, §5.1.)
+	•	CAP-73 (Stellar Protocol 26) introduces trust() on the SAC, letting a Soroban contract create a trustline within a single authorized invocation, the basis of the router's one-transaction path.
+	•	CAP-68 exposes admin() on the SAC, the basis of the router's on-chain capability discovery: the authorizer is read from the ledger, never from the client.
+
+8. Backends and the JS-SDK caveat
+8.1 The two backends
+Backend
+Used for
+Reserve
+User signatures
+cap73-one-signature
+Case C, the router path: one Soroban tx that creates and (where supported) authorizes, both asset classes, on-chain discovery. Preferred when the router is pinned and the holder is funded.
+Paid by the holder (CAP-73 has no sponsorship)
+1 (the onboard call)
+cap33-sponsored
+Case B, reserve-free classic onboarding; brand-new / under-funded accounts. The fallback whenever the holder cannot pay, and the sponsor-side default.
+Paid by the integrator/sponsor (CAP-33 sponsored reserves; sponsored CreateAccount)
+1 (the ChangeTrust)
+To restate the payer at the headline, because it matters everywhere it appears: on cap73-one-signature the holder pays the 0.5 XLM; on cap33-sponsored the sponsor pays it and the sponsorship stays locked for the lifetime of the trustline. selectBackend encodes exactly this rule: the router path requires config.router, cap73-one-signature in the issuer's backends, and a holder that exists and is fundedForReserve; everything else falls back to sponsored. Case A (zero-signature authorize) sits on top of either, or stands alone, and uses buildAuthorizeTx against the Authorizer with no ChangeTrust at all.
+8.2 Honest caveat, the Protocol-26 JS-SDK decode gap
+The JS @stellar/stellar-sdk cannot yet decode a Protocol-26 Soroban simulation result that writes a trustline authorization flag, i.e. the set_authorized step inside authorize-on-behalf. Concretely:
+	•	The SDK builds the correct authorize_trustline / router onboard transaction (operation, args, footprint request) without issue.
+	•	The classic flows, the CAP-33 sponsored ChangeTrust, getActivationStatus, and the SEP-7 URI construction, work in pure JS today.
+	•	Plain trustline creation is unaffected: a CAP-73 trust() that does not write the authorization flag (the open-asset router path) decodes in pure JS.
+	•	But decoding the simulation of an invocation that mutates a trustline authorization flag is not yet supported in the JS SDK, so for now that step is submitted via the Rust stellar CLI / RPC (the regulated reference demo does exactly this, and says so in its source).
+This is a temporary, upstream dependency that resolves when the JS SDK ships Protocol-26 decode support; it does not change the architecture, the transactions, or the on-chain contracts. The relayer quarantines it: the Rust sidecar lives in one hosted binary (§3.1), so no integrator ever carries the interim dependency in its own stack. The SDK's escape hatch, moving the build path off prepareTransaction onto manual simulateTransaction + assembleTransaction, is also available if upstream slips. Tracked in the risk register (§10.1).
+
+
+9. Delivery patterns and alternatives
+The RFP names three candidate mechanisms: (a) authorize trustlines on behalf of users via a standard interface, (b) a temporary intermediate account, (c) claimable balances. Authline implements (a) as the core standard, the general, non-custodial, interoperable path that works for both asset classes, and ships (c) as a fully specified delivery tier (Tier 2, this section), because it is the lowest-integration-effort path an exchange can take. (b) remains documented, not built (§9.2).
+9.1 Claimable-balance delivery (Tier 2)
+The idea: when the withdrawal destination lacks a trustline, the platform swaps its Payment operation for a CreateClaimableBalance, same hot key, no new accounts, 20–50 lines of code. The withdrawal never fails; the trustline work is deferred to claim time, where it lands on the activation page the RFP already requires. This is Case B deferred to claim time, the same sponsored sandwich, riding the claim transaction.
+Withdrawal-side transaction shape:
+CreateClaimableBalance(   asset, amount,   claimants = [     holder    — unconditional,     platform  — Not(BeforeRelativeTime(30 days))   // reclaim window   ] )
+Two protocol facts shape this:
+	•	The CB entry reserve is float, not spend. The creator (the platform) fronts 0.5 XLM × claimants, and it is refunded when the balance is claimed. Contrast Case B: a CAP-33-sponsored trustline locks the sponsor's 0.5 XLM for the lifetime of the trustline.
+	•	Claimable balances never expire. The platform MUST therefore add itself as a second claimant behind a reclaim predicate, e.g. Not(BeforeRelativeTime(30 days)), so unclaimed funds (and the reserve) can be recovered. A CB also inherits the clawback flag from the creator's trustline, so a regulated issuer's clawback power survives the deferred leg.
+Reserve economics
+Tier 2 - CB entry
+Case B - sponsored trustline
+Who pays
+Platform (creator), 0.5 XLM × claimants
+Sponsor, 0.5 XLM
+Duration
+Refunded when claimed, float
+Locked for the trustline's lifetime
+Unclaimed funds
+Reclaimed via the second-claimant predicate
+n/a, nothing moves until the user signs
+Claim-side transaction shape (open assets, the golden path). One atomic classic transaction (operations execute in order), one user signature, sponsor pays the trustline reserve:
+BEGIN_SPONSORING_FUTURE_RESERVES(holder)     [src: sponsor] ChangeTrust(asset, limit ≥ amount)           [src: holder] END_SPONSORING_FUTURE_RESERVES               [src: holder] ClaimClaimableBalance(balanceId)             [src: holder]
+The sponsor pre-signs (signature set is unordered, §6.2), sets short timebounds, and the activation page hands the SEP-7 URI to the user's wallet.
+
+The open/regulated asymmetry, stated openly. For an AUTH_REQUIRED asset, the protocol requires the claimant's trustline to be authorized at claim time, and the Soroban authorize call cannot ride the classic claim transaction. So:
+	•	Open assets (USDC, EURC): the full golden path, one deferred signature. This is the flagship Tier-2 flow.
+	•	Regulated assets: two user signatures, in one activation-page session: tx 1, sponsored ChangeTrust (signature 1) → the relayer submits authorize-on-behalf (no user signature) → tx 2, claim (signature 2). For regulated assets the inline Authorizer path (Tier 3 / Case A–B) remains primary; Tier 2 is still a valid fallback when the platform cannot integrate inline.
+Why this tier owns a real market gap. The evidence:
+	•	SDF's own documentation recommends claimable balances plus sponsored reserves for exactly this onboarding problem.
+	•	SEP-6 and SEP-24 already define claimable_balance_supported, and say the field "will be made mandatory in the future"; the Anchor Platform and Polaris define pending_trust statuses and trustline-polling loops around the same gap.
+	•	No exchange ships claimable-balance withdrawals today, verified across Coinbase, Kraken, Bitstamp, and Binance documentation and the LOBSTR helpdesk. A five-year-old SDF-recommended mechanism with zero CEX adoption is precisely the gap this RFP response claims.
+	•	The closest precedents are wallet-side and confirm the mechanism: LOBSTR's wallet auto-sends CBs when the receiver lacks a trustline (since Feb 2022), and the LOBSTR × MoneyGram production flow uses sponsored trustline creation, live third-party validation of Case B's exact mechanism.
+	•	Coinbase, Kraken, and Bitstamp run live USDC-on-Stellar withdrawals on classic rails (G-addresses only), the integration surface Tier 2 plugs into.
+	•	Direction matters: Binance/Kraken cannot accept inbound CBs on the deposit side. That does not block a CEX sending CBs on withdrawal, and we claim nothing about CB deposits.
+Nothing is wasted. AUTH_REQUIRED claims loop back through the same Trustline Authorizer; the claim UX is the activation page the RFP already requires; the claim transaction is the same sponsored sandwich as Case B. Tier 2 adds builders (buildClaimableBalanceTx, buildClaimTx, Tranche 2) and a claim flow on the dApp, not a parallel system.
+9.2 Temporary intermediate account ((b) - documented, not built)
+The third party controls a temp account that trusts and receives the asset, then forwards it. This unblocks the exchange side immediately, but the user still needs their own trustline to finally hold the asset. It suits custodial flows or new-account provisioning, not self-custody, so it stays documented as a situational pattern, with no deliverable attached.
+
+
+10. Security
+	•	The invariant is enforced by the protocol, not by us. Only the trustor can sign CHANGE_TRUST / CAP-73 trust(). No Authline component can create a trustline on a non-custodial user's account. The third party's powers are strictly: pay reserves (its own funds), authorize on-behalf (gated by on-chain policy), and assemble/submit transactions.
+	•	The authorizer can never be spoofed on the router path. The router reads the authorizer from SAC.admin() on-chain (CAP-68), clients pass only (sac, holder), so a malicious frontend or a stale config cannot redirect authorization to a rogue contract. The SAC id itself is defended by the pinned registry + reconcileWithRegistry.
+	•	A lying authorizer cannot fake success. The router's post-condition re-reads sac.authorized(holder) from the ledger and fails NotAuthorized on disagreement (§5.1).
+	•	Rejection is atomic. A typed policy rejection rolls back the entire router invocation, including the just-created trustline, a banned account is left with no partial state.
+	•	Authorization is permissionless but policy-gated. authorize_trustline can be called by anyone, but re-checks the denylist/allowlist (and pause) on every invocation, so a banned or not-allowed account is never authorized, even via a retried onboard.
+	•	Freeze cannot be defeated by re-onboarding. ban/freeze deauthorize as they ban; the policy check then blocks any re-authorization attempt.
+	•	Issuer retains full control. set_admin, upgrade, pause/unpause, deauthorize_trustline, ban/allow (and mint/clawback under the Treasury profile) are all admin-gated (require_auth on the stored admin), and independently of the contract, the issuer keeps its classic-side SetTrustLineFlags and clawback powers (§5.2). The issuer can pause the whole authorizer or hand off admin at any time.
+	•	The router has no admin to compromise. Stateless, immutable, storage-free: no pause key, no upgrade key, no privileged path (§5.1).
+	•	Auditability. Every Authorizer state transition emits a structured event (§5.2) so a compliance indexer can reconstruct the complete authorization history, a MiCA requirement (see the MiCA-aware design deliverable in APPLICATION.md).
+	•	Sponsorship is bounded. The integrator sponsors exactly the trustline reserve (and optionally a zero-balance CreateAccount); END_SPONSORING_FUTURE_RESERVES is sourced by the user so the sponsorship window closes within the same transaction. On Tier 2, the platform's exposure is a refundable CB entry reserve, recovered through the reclaim predicate if unclaimed.
+	•	Handoffs are one-way. The sponsor pre-signs with short timebounds (~15 min) before the SEP-7 handoff; completion is confirmed from ledger state, never from a returned XDR (§6.2).
+	•	Secure client defaults. The SDK refuses plaintext-HTTP RPC except for localhost (defaultAllowHttp), StrKey-validates every address it touches, and never resolves an asset by code alone.
+
+
+
+
+10.1 Risk register
+Risk
+Likelihood
+Impact
+Mitigation
+P26 JS-SDK decode gap, JS @stellar/stellar-sdk can't decode a Protocol-26 simulation that writes a trustline authorization flag, i.e. the authorize step (§8.2).
+Medium (narrow)
+Low, interim Rust-CLI/RPC submit for the authorize step only; classic and plain-trust flows are pure JS
+Architecture, txs, and contracts unchanged; the relayer quarantines the gap, the Rust sidecar lives in one hosted binary, not in any integrator's stack; the manual simulate/assemble escape hatch exists in the SDK; resolves when upstream ships P26 decode. Tracked against the SDK release.
+Protocol dependency, the router path depends on CAP-73 (trust()) and CAP-68 (admin()), both shipped in Protocol 26 (live).
+Low
+Medium
+Both CAPs are live on mainnet today; no funded deliverable waits on Protocol 27. And the router path is one backend: Cases A and B need only classic ops + an existing SAC, so the standard degrades gracefully on any network not at P26.
+Round timing (SCF #44), milestone dates assume the Q2 2026 review cadence.
+Medium
+Low
+Tranche 1 opens with the interface freeze and infra bootstrap (D1.1, upon approval); the team's live mainnet precursor (eurcv_auth) means the regulated-asset design is already production-validated, de-risking schedule slip.
+Adoption / integration effort, D3.2 names a wallet and an exchange (Bitpanda, via the SG↔Bitpanda flow) plus the SG-Forge regulated validation; integration effort is the #1 adoption risk.
+Medium
+High
+The integration ladder (§3) converts adoption from a bilateral project into a menu: Tier 1 is ~20 lines of HTTP (≈ days, not sprints), Tier 2 is a 20–50-line operation swap on the existing hot key. The Aha Company already owns the SG-Forge / EURCV engagement and is working the SG↔Bitpanda CEX-withdrawal flow; discovery removes bilateral integration deals.
+Router immutability, a bug in the deployed router cannot be patched in place.
+Low
+Medium
+The router is deliberately tiny (one method, no storage) and exhaustively unit-tested incl. rollback semantics; a successor deploy + a registry/ROUTERS pin update migrates every SDK consumer at once; nothing on-chain references the router by address.
+Scope confusion with the sibling g2c "C-Address" RFP, both touch onboarding.
+Low
+Low
+Authline is classic-asset trustline onboarding via a third party; the C-Address RFP concerns contract-address payment addressing. Distinct problems, distinct deliverables; documented to avoid reviewer conflation (see also Appendix A on C-addresses).
+
+10.2 MiCA mapping
+For an EU-regulated issuer the question is concrete: can a classic Stellar asset be operated under MiCA’s control and record-keeping obligations? Component by component:
+Issuer-side obligation
+Where the architecture answers it
+Control who may hold the instrument
+AUTH_REQUIRED + the Trustline Authorizer as SAC admin, denylist or allowlist policy re-checked on every authorization, on-chain (§5.2)
+Freeze / sanctions response
+freeze = ban + deauthorize, race-proof against re-onboarding (§5.2); independently of the contract, the issuer retains classic SetTrustLineFlags and clawback
+Issuance & redemption control
+Treasury profile mint / clawback, optional; issuers may keep supply operations on their own keys (§5.2)
+Record-keeping / audit
+Every Authorizer state transition emits a structured event; a compliance indexer reconstructs the complete authorization history from the ledger (§5.2)
+Operational resilience
+The Authorizer is pausable and admin-transferable; the router is stateless with no operator to fail (§5.1)
+The claim is deliberately bounded: Authline supplies the on-chain authorization layer that makes MiCA-aligned operation of a classic asset possible, the same model already running in production for SG-Forge’s EURCV, while legal qualification of any given asset remains the issuer’s and its counsel’s. The MiCA-aware design review is a named deliverable (APPLICATION.md, D2.3).
+11. Deployment
+Mainnet - the live precursor
+Component
+Contract id
+eurcv_auth authorizer (EURCV, SG-Forge)
+CB2DHZMQHQE3TGUMD6BRM7UCJZNIPKDRVEQOWBIRRS3G2FZOGDTRKSB3
+Verifiable on stellar.expert (public); activation page at eurcv.theaha.co. The eurcv_auth source repo is private, available on request. This single-asset denylist authorizer is the production-validated design the grant's asset-agnostic Trustline Authorizer generalizes.
+
+Testnet, the grant's proving ground (Tranches 1–2)
+Testnet is where every deliverable is exercised before mainnet: the onboard router deployed as the per-network singleton and pinned in the SDK's ROUTERS table; an AUTH_REQUIRED test asset (its authorizer installed as SAC admin) plus testnet USDC for the open class, both pinned in the registry; the examples/exchange-withdrawal/ demos runnable by any reviewer with fresh keypairs; and the Playwright + Vitest e2e suite driving the deployed dApp against real testnet RPC. The relayer (status + authorize endpoints) and the Tier-2 claim flow (CB withdrawal → activation-page claim) complete the testnet picture in Tranche 2.
+Mainnet, the grant's destination (D3.1)
+Deploy the onboard router (per-network singleton, pinned in ROUTERS) and the asset-agnostic Authorizer as SAC admin for a live AUTH_REQUIRED asset (e.g. EURCV), plus the open-asset path validated on a live open asset (e.g. mainnet USDC). Mainnet ids: placeholder pending deployment.
+
+12. Operating as a public good
+The SCF handbook asks three operational questions of every RFP submission, how the project is decentralized, what it collects about users, and how it is maintained after launch. The answers here are properties of the architecture, not policies bolted on.
+12.1 Decentralization
+	•	The trust-critical path has no operator. The router is a stateless, immutable, admin-free singleton (§5.1); the Authorizer is operated by each issuer, not by us (§5.2); capability discovery reads the ledger (CAP-68), not our servers. If The Aha Company disappeared the day after mainnet deployment, every deployed contract, every integration, and every activation flow would keep working.
+	•	No bilateral gatekeeping. Any issuer self-publishes a [TRUSTLINE_ONBOARDER] block (§7.1); any integrator discovers it; the SEP makes the interface implementable by anyone, including competing implementations.
+	•	The frontend is unhosted by default. The dApp is a static build; the repo ships dapp-pages.yml and dapp-ipfs.yml deploy workflows, and anyone can pin the IPFS build or serve it from their own domain.
+	•	The one convenience service is escapable. The relayer (§3.1) exists so Tier-1 platforms need no Stellar SDK; it is permissionless to replace, same Docker image, your infrastructure, and nothing in the standard references our instance. Centralization is offered as a convenience, never required as a dependency.
+12.2 Privacy and user tracking
+	•	No analytics, no PII. The dApp ships no trackers, no cookies, no fingerprinting; the only data it touches are public ledger artifacts (account ids, asset ids), processed client-side.
+	•	The relayer logs the minimum. Request logs (account id, asset, timestamp, result) are kept only for abuse prevention and rate limiting, with a short retention window documented in the Tranche-2 runbook. Self-hosting reduces even this to zero third-party exposure.
+	•	KYC never enters the standard. Identity verification, where a regulated issuer requires it, happens issuer-side, upstream of the allowlist; Authline’s contracts and SDK see only addresses. The standard does not define, transport, or store identity data.
+	•	No accounts, no sign-ups. Neither the dApp nor the SDK has a user database to breach.
+12.3 Maintenance and stewardship
+	•	The SEP is the maintenance commitment. After number assignment, the team stewards the spec through the stellar-protocol process, the same way it maintains the Contract Admin SEP (theahaco/admin-sep).
+	•	Code maintenance follows the team’s public-goods track record. Stellar Scaffold, the Stellar Registry, Moonlight, and sustained Stellar CLI contributions are all maintained post-grant today. @theaha/authline follows semver; the repo carries CI, a test suite that runs against live testnet, and a security-disclosure path documented in the repo.
+	•	The router needs no maintenance by construction. Stateless, immutable, no upgrade key: its failure mode is a successor deployment plus one ROUTERS pin update (§10.1), a procedure documented in the repo.
+	•	Community updates. Progress is reported on the SCF tranche cadence, in the stellar-protocol SEP discussion thread, and in the Stellar Dev Discord.
+Appendix A - The protocol floor
+Authline's design rests on a survey of every live and announced protocol mechanism that touches trustline creation. The conclusion is the moat: no live or announced protocol mechanism lets a third party create a classic trustline without the holder's own signature, Authline sits on the proven minimum, and nothing on the horizon undercuts it.
+	•	ChangeTrust (classic). Authorized by the trustor, the account that will hold the asset. The floor itself.
+	•	CAP-73 trust() (Protocol 26, live). Requires require_auth(holder), and cannot be reserve-sponsored, the CAP says verbatim: "Sponsorship is not supported for creating a new trustline." The holder self-funds the 0.5 XLM (this is why the router path is holder-pays).
+	•	CAP-68 admin() (live). Exposes the SAC admin on-chain, the read primitive behind the router's capability discovery. It reads; it cannot sign anything for anyone.
+	•	CAP-33 sponsorship (live). Classic-only: the BEGIN_SPONSORING_FUTURE_RESERVES(user) (sourced by the sponsor) … END_SPONSORING_FUTURE_RESERVES (sourced by the user) sandwich moves who pays, not who signs, the user still signs the envelope once. This is Case B's (and Tier 2's claim-side) mechanism.
+	•	CAP-71 (Protocol 27 "Zipper", testnet ~Jun 18 2026, mainnet vote ~Jul 8 2026). Adds Soroban-only delegated account auth. It never signs classic operations, so it cannot create a classic trustline for anyone. No funded deliverable in this grant depends on P27.
+	•	CAP-72 (contract signers on G-accounts). Draft, not in P27, and its delegated signers "can not be used to sign the transactions directly," so never a classic ChangeTrust.
+	•	PreAuthTx "vouchers." A live primitive: the holder pre-signs a future ChangeTrust by adding its hash as a one-time signer. Documented why-not, not built: it is sequence-number-fragile (any intervening tx invalidates the voucher), requires the asset to be known in advance, and wallets warn loudly on add-signer operations. It re-introduces exactly the scary prompt Authline removes.
+	•	Smart-wallet C-addresses (CAP-46-06 contract balances). A contract address can hold a SAC balance with no trustline at all, and set_authorized covers contract addresses, but a classic Payment cannot target a C-address (the destination is a MuxedAccount), and claimable-balance claimants are AccountID (G-only, CAP-23 XDR). So contract balances are a wallet/dApp-side receive path with zero CEX relevance today, it is the one segment Protocol 27 strengthens, and it is the sibling C-Address RFP's territory, not a tier of this ladder.
+Every Authline path, Case A's permissionless authorize, Case B's sponsorship, Case C's one-tx router, Tier 2's deferred claim, composes only these proven, live primitives. Someone always pays the 0.5 XLM reserve: the sponsor on the sponsored paths (Case B, Tier 2), the holder on the router path (Case C). No path makes it vanish, and no announced protocol change makes any of this obsolete.

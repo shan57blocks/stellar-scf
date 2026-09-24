@@ -1,0 +1,1386 @@
+Source: https://docs.google.com/document/d/1ED8c_HOQKdhy9oeB6HDQlywWLLw8nQR4CJVusCPMTfg/edit?usp=sharing
+
+﻿ChimpDAO Card Wallet
+Technical Architecture Document V2
+SCF Build - Integration Track
+Project Type: Wallet
+Platform Scope: iOS-first
+Budget Scope: $110,000 in XLM
+________________
+
+
+1. Executive Summary
+ChimpDAO is building a physical wallet card for Stellar.
+The product combines a secure NFC card, a native iOS app, Soroban smart contracts, and Stellar-native protocol integrations to create a hardware-secured wallet experience. Users will be able to activate a physical card, fund a card-linked Stellar account, view balances, authorize actions by tapping the card, swap assets, and access DeFi strategies through a simple mobile interface.
+The card uses the familiar form factor of a bank card, but it is not a debit card, credit card, prepaid card, payment card issuer product, custodial wallet, or fiat payment service. Technically, the card acts as a hardware-secured signer for Stellar actions.
+ChimpDAO’s goal is to make Stellar feel tangible and accessible:
+As familiar as tapping a card, as powerful as a programmable Stellar wallet.
+For this SCF Build Integration Track submission, the core integrations are:
+* DeFindex as the primary yield strategy integration.
+* Soroswap for asset conversion and routing.
+* Stellar Wallets Kit-compatible flows for onboarding and wallet interoperability.
+* Blend support where relevant, either through DeFindex strategies or a limited direct lending-market proof of concept.
+The project is iOS-only for this grant. Android support may be explored later but is not part of the funded scope.
+________________
+
+
+2. Product Definition
+2.1 What ChimpDAO Card Wallet Is
+ChimpDAO Card Wallet is a non-custodial physical wallet interface for Stellar.
+It consists of:
+* A secure NFC card.
+* A native iOS application.
+* Soroban smart contracts.
+* A card-linked Stellar account / smart wallet model.
+* Stellar RPC transaction preparation and submission.
+* Integrations with Stellar DeFi and wallet infrastructure.
+The card signs action-specific authorization payloads. The iOS app prepares transactions and displays the user interface. Soroban contracts verify permissions and execute card-linked logic. External protocols such as DeFindex, Soroswap, and Blend provide the DeFi functionality.
+2.2 What ChimpDAO Card Wallet Is Not
+ChimpDAO is not building:
+* A regulated payment card.
+* A debit card or credit card.
+* A prepaid card.
+* A custodial wallet.
+* A bank account.
+* A fiat on/off-ramp.
+* A merchant payment processor.
+* A remittance product.
+* A regulated investment product.
+* A yield guarantee.
+* A financial advice service.
+ChimpDAO will not custody user funds, operate fiat rails, issue payment instruments, process merchant payments, or provide investment advice.
+The product is a wallet interface and hardware-backed authorization layer for Stellar-native assets and protocols.
+________________
+
+
+3. Existing ChimpDAO Infrastructure
+ChimpDAO already has a working technical foundation linking physical objects to on-chain Stellar ownership.
+The current ChimpDAO system uses secure NFC chips embedded in physical merchandise. Each chip can generate and store a private key directly on the hardware. The private key remains inside the chip and is not exposed to the mobile app. The chip signs messages through NFC/APDU commands, and Soroban smart contracts verify those signatures to authorize ownership-related actions.
+The existing implementation includes:
+* Secure NFC chip sourcing and validation.
+* Native iOS NFC/APDU communication.
+* Chip-generated keys.
+* Hardware-backed message signing.
+* SEP-53-inspired authentication.
+* Soroban smart contracts.
+* Claim and transfer flows.
+* Physical-object-linked NFTs.
+* Ownership verification through Stellar.
+* A public website.
+* Open-source repositories for contracts and iOS.
+This validates the core primitive required for ChimpDAO Card Wallet:
+Physical object
+→ secure NFC chip
+→ hardware-generated private key
+→ action-specific signature
+→ Soroban verification
+→ Stellar ownership or transaction authorization
+The grant extends this validated primitive from physical merchandise authentication into a broader physical wallet card for Stellar assets and DeFi.
+________________
+
+
+4. Architecture Goals
+4.1 Primary Goals
+The funded architecture must enable users to:
+* Activate a physical ChimpDAO card.
+* Register a card public key or card identity on Stellar.
+* Associate the card with a card-linked wallet account.
+* Fund that card-linked wallet with Stellar assets.
+* View balances in the iOS app.
+* Authorize transactions through the physical card.
+* Swap assets through Soroswap.
+* Deposit supported assets into DeFindex.
+* View DeFindex positions.
+* Withdraw from DeFindex.
+* Support Blend exposure where relevant.
+* Connect or associate external wallets through wallet-compatible flows.
+* Verify all major actions on-chain.
+4.2 Technical Goals
+The system must be:
+* Non-custodial.
+* Stellar-native.
+* Verifiable on testnet and mainnet.
+* Modular enough to support future integrations.
+* Secure against replay attacks.
+* Explicit about action-level authorization.
+* Clear about on-chain and off-chain responsibilities.
+* Simple enough for users to understand.
+* Precise enough for reviewers to verify.
+4.3 Non-Goals for This Grant
+The grant will not fund:
+* Android development.
+* Fiat payment rails.
+* Card network integration.
+* Merchant acquiring.
+* Banking integrations.
+* Custody.
+* On/off-ramp operation.
+* Marketing.
+* Token rewards.
+* Security audit costs.
+* Regulated financial services.
+________________
+
+
+5. High-Level System Architecture
+  
+
+
+
+The architecture is divided into four layers:
+Layer 1 - Physical Security Layer
+* Secure NFC card.
+* Hardware-generated key.
+* Non-extractable private key.
+* NFC/APDU signing.
+* Physical possession requirement.
+Layer 2 - Mobile Wallet Layer
+* ChimpDAO iOS app.
+* Card activation.
+* Transaction review.
+* Stellar balance display.
+* DeFi strategy display.
+* NFC signing prompts.
+* Stellar RPC integration.
+* External wallet onboarding.
+Layer 3 - Stellar Execution Layer
+* Stellar accounts.
+* Stellar assets.
+* Soroban smart contracts.
+* Contract account / smart wallet logic.
+* Stellar RPC simulation and submission.
+* On-chain authorization verification.
+Layer 4 - Ecosystem Integration Layer
+* DeFindex.
+* Soroswap.
+* Blend.
+* Stellar Wallets Kit-compatible flows.
+* Future-ready asset and payment modules.
+________________
+
+
+6. Proposed Account Model
+ChimpDAO Card Wallet will use a card-linked account architecture.
+The preferred model is a Soroban smart wallet / contract account model where the physical card acts as an authorized hardware signer. This allows the card-linked wallet to hold Stellar assets and interact with Stellar contracts while enforcing custom authorization rules.
+The final implementation may use one of two closely related patterns, depending on implementation constraints discovered during Tranche 1:
+Option A - Card-Linked Contract Account
+The card-linked wallet is a Soroban contract account.
+The contract account can hold assets and enforce authorization using custom logic. The physical card public key is registered as an authorized signer. Sensitive actions require a valid card-backed signature.
+This is the preferred long-term model because it aligns with smart wallet patterns and allows programmable authorization.
+Option B - Card Registry + Controlled User Account
+The user’s Stellar account remains the primary asset-holding account, while a Soroban CardRegistry and authorization layer verifies card-backed signatures before allowing specific contract actions.
+This model may be used for specific flows where direct contract account behavior is not optimal or where protocol integrations require a simpler account pattern.
+6.1 Account Layers
+The system distinguishes four account layers:
+1. External User Wallet
+An external Stellar wallet used for onboarding, funding, or interoperability.
+Examples:
+* Freighter-compatible wallet.
+* Wallets Kit-supported wallet.
+* Mobile deep-link wallet flow.
+* WalletConnect-compatible flow where feasible.
+The external wallet is not required to be the main ChimpDAO wallet, but it can help users fund or connect their card wallet.
+2. Card-Linked Smart Wallet
+The primary ChimpDAO wallet account.
+This is the account controlled by the physical card authorization model. It can hold Stellar assets, interact with Soroban contracts, and execute supported DeFi actions.
+3. Transaction Submitter / Fee Payer
+A transaction source account may be used to submit transactions to the Stellar network.
+Depending on final implementation, this can be:
+* The user’s account.
+* The card-linked wallet account.
+* A submitter/channel account.
+* A sponsored-fee account, if implemented.
+The submitter does not custody user funds.
+4. Protocol Accounts and Contracts
+External ecosystem protocols remain independent.
+These include:
+* DeFindex vault contracts.
+* Soroswap router contracts and routing services.
+* Blend pools.
+* Stellar asset contracts.
+* Token contracts.
+* External wallets.
+ChimpDAO prepares and authorizes interactions with these protocols but does not replace them.
+________________
+
+
+7. Account Model Diagram
+
+
+  
+
+
+
+________________
+
+
+8. Hardware Security Model
+8.1 Secure NFC Card
+The ChimpDAO card contains a secure chip capable of generating and storing private keys directly on the hardware.
+The chip is responsible for:
+* Generating a key pair.
+* Storing the private key.
+* Exposing or deriving the public key.
+* Signing action-specific payloads.
+* Keeping the private key non-extractable.
+* Communicating with the iOS app through NFC/APDU.
+The card is treated as a hardware signer.
+8.2 Key Slots
+The existing ChimpDAO implementation uses a specific key slot for chip-generated keys. The card wallet design will continue using a deterministic and documented key slot strategy.
+Potential key usage:
+* Slot 1: primary card wallet signer.
+* Additional slots: future expansion for secondary identities, recovery, limited-use authorizations, or multi-purpose card profiles.
+* Slot 0: not used for externally loaded keys unless a future architecture decision explicitly requires it.
+For this grant, the primary goal is to use one secure hardware-generated key as the card’s main signing identity.
+8.3 NFC/APDU Communication
+The iOS app communicates with the chip through NFC/APDU commands.
+The app does not receive the private key. It sends a signing request to the card. The card returns a signature. The app includes that signature in the transaction authorization flow.
+8.4 Physical Possession Requirement
+Sensitive actions require the user to tap the physical card.
+This creates a physical possession requirement for key actions such as:
+* Activation.
+* Transfers.
+* DeFi deposits.
+* DeFi withdrawals.
+* Permission changes.
+* Recovery or revocation actions where supported.
+________________
+
+
+9. Authorization Model
+The ChimpDAO authorization model is action-specific.
+The card does not sign generic approvals. It signs a structured payload describing one exact action.
+Examples of action types:
+ACTIVATE_CARD
+ASSOCIATE_EXTERNAL_WALLET
+TRANSFER_ASSET
+EXECUTE_SOROSWAP
+DEPOSIT_DEFINDEX
+WITHDRAW_DEFINDEX
+SET_LIMIT
+LOCK_CARD
+REVOKE_CARD
+Each action payload includes enough context to prevent misuse.
+9.1 Canonical Payload Fields
+A representative payload contains:
+network_passphrase
+contract_id
+card_id
+card_public_key
+card_account_id
+action_type
+source_account
+target_contract
+target_function
+asset_identifier
+asset_issuer_or_contract
+amount
+destination
+strategy_or_pool_id
+route_hash
+min_amount_out
+max_slippage_bps
+nonce
+expiration_ledger
+chain_context
+Not every field is used for every action, but every action must be deterministic and explicit.
+9.2 Signature Verification Rules
+A signature is accepted only if:
+* It is produced by the registered card public key.
+* The card is active.
+* The card is not revoked.
+* The nonce has not been used.
+* The expiration ledger has not passed.
+* The payload matches the requested action.
+* The target contract is allowed.
+* The asset is supported.
+* The amount respects the policy.
+* The network passphrase matches the target network.
+* The contract ID matches the expected contract.
+* The signature cannot be reused for another action.
+9.3 Replay Protection
+Replay protection is enforced through:
+* Nonces.
+* Expiration ledgers.
+* Action-specific payloads.
+* Contract ID binding.
+* Network passphrase binding.
+* Target contract binding.
+* Optional monotonic nonce sequence per card.
+9.4 Smart Wallet Authorization
+The preferred architecture uses a smart wallet / contract account pattern.
+The card-linked smart wallet can implement custom authorization logic. This may rely on a __check_auth-style authorization flow or an equivalent explicit contract-level verification flow depending on final implementation constraints.
+The key concept is:
+No card-backed signature
+→ no sensitive card-linked action
+
+________________
+10. Authorization Flow Diagram
+  
+
+
+
+________________
+
+
+11. Soroban Contract Architecture
+The contract system will be modular.
+The objective is to separate:
+* Card identity.
+* Wallet authorization.
+* Policy enforcement.
+* Nonce management.
+* DeFi routing.
+* Recovery and revocation.
+11.1 Contract Module Diagram
+  
+
+
+
+________________
+
+
+12. Contract Modules
+12.1 CardRegistry
+The CardRegistry stores card identities and activation state.
+Responsibilities:
+* Register card IDs.
+* Register card public keys.
+* Track activation state.
+* Track card-linked account.
+* Track revocation state.
+* Emit activation events.
+* Prevent duplicate card registration.
+Representative functions:
+register_card(card_id, card_public_key, owner_or_account)
+activate_card(card_id, activation_signature)
+revoke_card(card_id, revocation_signature)
+get_card(card_id)
+is_card_active(card_id)
+is_card_revoked(card_id)
+get_card_public_key(card_id)
+get_card_account(card_id)
+Expected tests:
+* Register valid card.
+* Reject duplicate registration.
+* Reject invalid activation signature.
+* Reject revoked card.
+* Return correct card metadata.
+* Emit expected events.
+12.2 CardAccount / Smart Wallet
+The CardAccount is the wallet authorization layer.
+Responsibilities:
+* Hold or control card-linked assets.
+* Verify card-backed signatures.
+* Enforce action-specific permissions.
+* Execute transfers.
+* Execute allowed contract calls.
+* Interact with DeFiRouter.
+* Enforce policy.
+* Support smart wallet behavior.
+Representative functions:
+__check_auth(signature_payload, signatures, auth_context)
+
+
+execute_transfer(asset, amount, destination, card_signature)
+
+
+execute_contract_call(
+    target_contract,
+    function_name,
+    args,
+    card_signature
+)
+
+
+execute_defi_action(
+    action_type,
+    protocol_id,
+    action_args,
+    card_signature
+)
+Expected tests:
+* Accept valid card-backed authorization.
+* Reject invalid signer.
+* Reject wrong action type.
+* Reject wrong target contract.
+* Reject wrong amount.
+* Reject expired authorization.
+* Reject replayed nonce.
+* Reject unsupported protocol.
+* Reject revoked card.
+* Execute valid transfer.
+* Execute valid DeFi call.
+12.3 NonceManager
+The NonceManager prevents replay attacks.
+Responsibilities:
+* Store used nonces.
+* Reject reused nonces.
+* Support expiration-ledger checks.
+* Optionally support sequential nonces.
+* Bind nonces to card IDs and action scopes.
+Representative functions:
+consume_nonce(card_id, nonce)
+is_nonce_used(card_id, nonce)
+get_next_nonce(card_id)
+validate_expiration(expiration_ledger)
+Expected tests:
+* Accept unused nonce.
+* Reject reused nonce.
+* Reject expired payload.
+* Support card-specific nonce isolation.
+* Support action-specific nonce isolation if implemented.
+12.4 PolicyManager
+The PolicyManager defines what the card-linked wallet is allowed to do.
+Responsibilities:
+* Define supported assets.
+* Define supported protocols.
+* Define allowed action types.
+* Define optional limits.
+* Define trusted external wallets.
+* Define emergency lock behavior.
+* Define protocol-specific limits.
+Representative functions:
+set_asset_allowed(asset, allowed)
+set_protocol_allowed(protocol_id, allowed)
+set_action_allowed(action_type, allowed)
+set_transfer_limit(asset, limit)
+set_defi_limit(protocol_id, asset, limit)
+associate_external_wallet(wallet_address)
+remove_external_wallet(wallet_address)
+lock_card(card_id)
+unlock_card(card_id)
+is_action_allowed(action_context)
+Expected tests:
+* Accept allowed action.
+* Reject unsupported asset.
+* Reject unsupported protocol.
+* Reject action above limit.
+* Reject locked card.
+* Accept trusted wallet association.
+* Reject unauthorized policy update.
+12.5 DeFiRouter
+The DeFiRouter coordinates protocol interactions.
+Responsibilities:
+* Route deposits to DeFindex.
+* Route withdrawals from DeFindex.
+* Route swaps through Soroswap.
+* Support Blend exposure where relevant.
+* Keep protocol adapters separated.
+* Keep authorization checks separate from protocol logic.
+Representative functions:
+deposit_defindex(
+    strategy_id,
+    asset,
+    amount,
+    min_shares,
+    card_signature
+)
+
+
+withdraw_defindex(
+    strategy_id,
+    shares,
+    min_amount_out,
+    card_signature
+)
+
+
+execute_soroswap(
+    route_hash,
+    asset_in,
+    asset_out,
+    amount_in,
+    min_amount_out,
+    card_signature
+)
+
+
+execute_blend_action(
+    pool_id,
+    action_type,
+    asset,
+    amount,
+    card_signature
+)
+Expected tests:
+* Execute valid DeFindex deposit.
+* Execute valid DeFindex withdrawal.
+* Reject unsupported strategy.
+* Reject amount below slippage constraints.
+* Execute valid Soroswap route.
+* Reject manipulated route.
+* Support Blend exposure where implemented.
+* Reject unauthorized protocol call.
+12.6 RecoveryModule
+Recovery is important for wallet UX but must be scoped carefully.
+Initial recovery options may include:
+* External wallet association.
+* Emergency card lock.
+* Card revocation.
+* Policy-based recovery.
+* Future multi-signer recovery.
+The grant will prioritize safe revocation and lock mechanisms over complex social recovery.
+Representative functions:
+lock_card(card_id, authorization)
+revoke_card(card_id, authorization)
+set_recovery_wallet(wallet_address, card_signature)
+recover_to_new_card(old_card_id, new_card_id, recovery_authorization)
+Recovery details will be finalized after testing the card account model.
+________________
+
+
+13. iOS Application Architecture
+The iOS app is the main user interface and orchestration layer.
+13.1 iOS Modules
+  13.2 Planned iOS Services
+NFC / APDU Service
+Responsibilities:
+* Detect card tap.
+* Read NDEF data where relevant.
+* Send APDU commands.
+* Request public key.
+* Request signature.
+* Handle card errors.
+* Handle user cancellation.
+* Handle timeout and retry.
+Card Service
+Responsibilities:
+* Store local card profile.
+* Track activation state.
+* Track card ID.
+* Track public key.
+* Track card-linked account.
+* Display card status.
+Stellar Service
+Responsibilities:
+* Connect to Stellar RPC.
+* Fetch account state.
+* Fetch balances.
+* Fetch contract state.
+* Prepare transactions.
+* Simulate transactions.
+* Assemble transactions.
+* Submit transactions.
+* Poll transaction status.
+* Parse errors.
+Transaction Builder
+Responsibilities:
+* Build activation transaction.
+* Build transfer transaction.
+* Build Soroswap transaction.
+* Build DeFindex deposit transaction.
+* Build DeFindex withdrawal transaction.
+* Build Blend proof-of-concept transaction where relevant.
+* Bind transaction context to card payload.
+DeFindex Service
+Responsibilities:
+* Fetch supported strategies.
+* Fetch vault data.
+* Fetch APY and position data where available.
+* Prepare deposit transaction.
+* Prepare withdrawal transaction.
+* Display user positions.
+* Handle strategy-specific errors.
+Soroswap Service
+Responsibilities:
+* Fetch quote.
+* Fetch or construct route.
+* Display slippage.
+* Display expected output.
+* Prepare swap transaction or route call.
+* Protect against manipulated route data.
+* Bind route data to signed payload.
+Blend Service
+Responsibilities:
+* Display Blend-supported exposure where relevant.
+* Read position data where applicable.
+* Support direct proof-of-concept action if feasible.
+* Keep Blend as secondary to the primary DeFindex integration.
+Wallet Interoperability Service
+Responsibilities:
+* Support external wallet association.
+* Support Wallets Kit-compatible or wallet-compatible flows where feasible on mobile.
+* Support external wallet funding flow.
+* Support Freighter-compatible flow where applicable.
+* Support deep-link or WalletConnect-style connection where technically feasible.
+________________
+
+
+14. User Flows
+14.1 Card Activation Flow
+  
+
+Completion criteria:
+* A new card can be activated.
+* The card public key is registered.
+* The card-linked account is created or associated.
+* Activation is verifiable on testnet.
+* Activation is later verifiable on mainnet.
+14.2 External Wallet Association Flow
+  
+
+Completion criteria:
+* At least one wallet-compatible association path works.
+* The external wallet address is visible in the app.
+* The associated address can be used for funding or interoperability.
+14.3 Funding Flow
+  
+
+Completion criteria:
+* The card-linked account can receive XLM.
+* The card-linked account can receive at least one supported Stellar asset.
+* The app displays updated balances.
+* Funding is verifiable on Stellar.
+14.4 Soroswap Conversion Flow
+  
+
+Completion criteria:
+* A supported quote/route can be fetched.
+* The app displays expected output and slippage.
+* The card signs the route-specific payload.
+* The swap is verifiable on-chain.
+14.5 DeFindex Deposit Flow
+  
+
+Completion criteria:
+* DeFindex strategy list is visible.
+* User can deposit a supported asset.
+* Deposit requires card-backed authorization.
+* Position is visible after deposit.
+* Transaction is verifiable on Stellar.
+14.6 DeFindex Withdrawal Flow
+  
+
+Completion criteria:
+* User can withdraw from a supported position.
+* Withdrawal requires card-backed authorization.
+* Updated balance is displayed.
+* Transaction is verifiable on Stellar.
+14.7 Stellar Transfer Flow
+This is a wallet transfer flow, not a regulated payment card flow.
+  
+
+Completion criteria:
+* User can prepare a Stellar-native transfer.
+* Card authorization is required.
+* Transfer is verifiable on Stellar.
+* The app clearly avoids presenting this as a bank card payment.
+________________
+
+
+15. Stellar RPC Transaction Lifecycle
+For every Soroban interaction, the iOS app follows a structured transaction lifecycle.
+  
+
+
+
+Detailed lifecycle:
+1. User selects an action.
+2. The app builds a contract invocation.
+3. The app builds an action-specific card authorization payload.
+4. The app requests a signature from the secure NFC card.
+5. The card signs the payload and returns the signature.
+6. The app creates the Soroban transaction.
+7. The app simulates the transaction through Stellar RPC.
+8. The app receives required ledger footprint, resource fees, and authorization data.
+9. The app assembles the transaction.
+10. The app signs the transaction with the required transaction source account.
+11. The app submits the transaction.
+12. The app polls transaction status.
+13. The app updates balances, positions, or error states.
+This lifecycle applies to:
+* Card activation.
+* External wallet association.
+* Transfers.
+* Soroswap conversions.
+* DeFindex deposits.
+* DeFindex withdrawals.
+* Blend actions if implemented.
+* Policy updates.
+* Recovery actions.
+________________
+
+
+16. DeFindex Integration Design
+DeFindex is the primary DeFi integration for this grant.
+ChimpDAO will use DeFindex to let users allocate card-linked Stellar assets into yield strategies from the iOS app.
+16.1 User Experience
+The user experience should be simple:
+Fund card
+→ open Earn screen
+→ select strategy
+→ review deposit
+→ tap card
+→ position appears
+16.2 Technical Responsibilities
+The ChimpDAO app will:
+* Fetch supported DeFindex vaults or strategies.
+* Display relevant strategy data.
+* Display asset requirements.
+* Display APY or yield information where available.
+* Prepare deposit transactions.
+* Prepare withdrawal transactions.
+* Request card signatures.
+* Submit transactions.
+* Display positions.
+* Display withdrawal results.
+The ChimpDAO contracts will:
+* Verify card-backed authorization.
+* Route allowed deposits to DeFindex.
+* Route allowed withdrawals from DeFindex.
+* Enforce policy constraints.
+* Prevent replay.
+* Bind each signature to the exact vault, asset, and amount.
+16.3 DeFindex Payload Context
+A DeFindex deposit payload should include:
+action_type = DEPOSIT_DEFINDEX
+card_account_id
+defindex_vault_id
+asset_identifier
+amount
+min_shares
+max_slippage_bps
+nonce
+expiration_ledger
+network_passphrase
+contract_id
+A DeFindex withdrawal payload should include:
+action_type = WITHDRAW_DEFINDEX
+card_account_id
+defindex_vault_id
+shares_or_amount
+min_amount_out
+destination_account
+nonce
+expiration_ledger
+network_passphrase
+contract_id
+16.4 DeFindex Verification Criteria
+Completion is verifiable when:
+* Supported DeFindex strategies are visible in the app.
+* A card-linked account can deposit into a DeFindex strategy.
+* A card-linked account can withdraw from that strategy.
+* Position data is displayed in the ChimpDAO app.
+* Transactions are verifiable through Stellar explorers.
+* Contract addresses and transaction examples are documented.
+________________
+
+
+17. Soroswap Integration Design
+Soroswap is used for asset conversion and routing.
+The goal is to reduce friction when a user holds one asset but needs another asset for a supported action.
+17.1 Example Use Case
+A user holds XLM but wants to deposit USDC into a DeFindex strategy.
+ChimpDAO should allow:
+XLM balance
+→ quote route through Soroswap
+→ review swap
+→ tap card
+→ receive USDC
+→ deposit into DeFindex
+Depending on transaction complexity, the swap and deposit may be:
+* A single composed transaction, if feasible.
+* A guided two-step flow: swap first, then deposit.
+* A staged flow where the app tracks both actions.
+17.2 Soroswap Payload Context
+A Soroswap payload should include:
+action_type = EXECUTE_SOROSWAP
+card_account_id
+asset_in
+asset_out
+amount_in
+min_amount_out
+route_hash
+max_slippage_bps
+router_contract
+nonce
+expiration_ledger
+network_passphrase
+contract_id
+17.3 Route Integrity
+The route displayed to the user must match the route signed by the card.
+To prevent route manipulation:
+* The route or route hash is included in the signed payload.
+* The minimum amount out is included in the signed payload.
+* The slippage value is included in the signed payload.
+* The asset in and asset out are included in the signed payload.
+* The router or target contract is included in the signed payload.
+17.4 Soroswap Verification Criteria
+Completion is verifiable when:
+* The app can fetch or construct a supported swap route.
+* The app displays quote, slippage, and expected output.
+* The card signs a route-bound payload.
+* The swap succeeds on testnet and/or mainnet.
+* Transaction examples are documented.
+________________
+
+
+18. Blend Support Design
+Blend is a secondary DeFi integration.
+The preferred approach is to support Blend through DeFindex strategies when available. This keeps the user experience focused and avoids fragmenting the product.
+If feasible within scope, ChimpDAO may also implement a limited direct Blend proof of concept.
+18.1 Blend Through DeFindex
+This is the preferred path.
+Flow:
+Card-linked asset
+→ DeFindex strategy
+→ strategy has Blend exposure
+→ user sees position through ChimpDAO
+This allows ChimpDAO to support Blend exposure without building a full standalone Blend interface during this grant.
+18.2 Direct Blend Proof of Concept
+A direct proof of concept may include:
+* Reading selected Blend pool data.
+* Displaying lending market information.
+* Preparing one limited supply or withdraw action.
+* Requiring card-backed authorization.
+* Documenting transaction examples.
+18.3 Blend Verification Criteria
+Completion is verifiable through either:
+* A DeFindex strategy using Blend exposure displayed in the ChimpDAO app.
+* Or a direct limited Blend action successfully executed and documented.
+________________
+
+
+19. Stellar Wallets Kit-Compatible Interoperability
+ChimpDAO builds its own card wallet experience, but it should not become a closed wallet silo.
+The iOS app will include a wallet interoperability layer.
+19.1 Goals
+The wallet interoperability layer should allow users to:
+* Connect or associate an external Stellar wallet.
+* Fund the card-linked wallet.
+* Confirm ownership of an external address.
+* Move assets between ChimpDAO and the broader Stellar ecosystem.
+* Use wallet-compatible onboarding flows where technically feasible.
+19.2 Implementation Options
+Because this grant is iOS-only, implementation may use one or more mobile-compatible approaches:
+* Stellar Wallets Kit-compatible flow.
+* Freighter-compatible flow where applicable.
+* WalletConnect-style flow.
+* Deep-link flow.
+* External wallet funding flow.
+* Signed proof of address ownership.
+The deliverable is not tied to one rigid implementation method. The requirement is a verifiable external wallet interoperability path.
+19.3 Verification Criteria
+Completion is verifiable when:
+* A user can associate an external Stellar wallet address with the ChimpDAO card profile.
+* A user can fund the card-linked account from an external wallet.
+* The flow is documented.
+* Screenshots or a demo video show the process.
+* Testnet or mainnet transactions prove the funding path.
+________________
+
+
+20. Stellar Asset Support
+The first supported assets should be conservative.
+Initial support:
+* XLM.
+* USDC or another widely used Stellar asset where technically feasible.
+* Assets required by selected DeFindex strategies.
+* Assets required by selected Soroswap routes.
+The app should distinguish:
+* Liquid wallet balances.
+* DeFi positions.
+* Pending transactions.
+* Unsupported assets.
+* Future asset modules.
+Future versions may support additional tokenized assets, including real-world asset tokens, as long as ChimpDAO remains a non-custodial wallet interface and does not operate regulated services.
+________________
+
+
+21. Future-Ready RWA and Payment Utility
+ChimpDAO’s long-term vision includes real-world asset and payment-like utility, but this grant avoids regulated deliverables.
+Future-ready modules may include:
+* Displaying additional Stellar asset metadata.
+* Displaying tokenized real-world asset balances.
+* Supporting wallet transfers to Stellar addresses.
+* Supporting QR-based Stellar payment requests.
+* Evaluating compatibility with Etherfuse-style assets.
+* Evaluating compatibility with Abroad-style payment flows.
+* Evaluating compatibility with Anchor-based infrastructure.
+For this grant, these are not core regulated payment deliverables.
+ChimpDAO’s role remains:
+Wallet interface
++ card-backed authorization
++ Stellar transaction preparation
++ protocol integration
+ChimpDAO’s role does not include:
+Custody
++ fiat rails
++ payment processing
++ regulated card issuance
++ merchant acquiring
++ financial advice
+
+________________
+22. Non-Custodial and Compliance Boundaries
+The card form factor may look familiar to users, but the product must remain clearly non-custodial and non-regulated.
+22.1 ChimpDAO Does Not
+* Hold user funds.
+* Control user funds.
+* Store private keys.
+* Issue payment cards.
+* Process fiat payments.
+* Operate on/off-ramps.
+* Provide merchant payment processing.
+* Guarantee yield.
+* Recommend investments.
+* Make investment decisions for users.
+* Operate regulated financial infrastructure.
+22.2 ChimpDAO Does
+* Provide a mobile wallet interface.
+* Provide a secure physical signing device.
+* Prepare Stellar transactions.
+* Submit user-authorized transactions.
+* Display balances.
+* Display positions.
+* Integrate Stellar-native protocols.
+* Enforce card-backed authorization.
+* Document risks and user responsibilities.
+22.3 User-Facing Disclaimers
+The app should include clear disclaimers:
+* DeFi strategies involve risk.
+* Yield is not guaranteed.
+* ChimpDAO does not custody funds.
+* ChimpDAO is not a bank.
+* ChimpDAO is not a regulated card issuer.
+* ChimpDAO does not provide investment advice.
+* Users are responsible for their actions.
+________________
+
+
+23. Security Threat Model
+23.1 Threat: Replay Attack
+An attacker tries to reuse a valid card signature.
+Mitigations:
+* Nonce per card.
+* Expiration ledger.
+* Action-specific payload.
+* Contract ID binding.
+* Target contract binding.
+* Network passphrase binding.
+* Nonce consumption on successful use.
+23.2 Threat: Signature Reuse for Different Action
+A signature for one action is reused for another.
+Mitigations:
+* Include action type in payload.
+* Include target contract.
+* Include function name.
+* Include asset.
+* Include amount.
+* Include destination or strategy ID.
+* Contract verifies exact action context.
+23.3 Threat: Route Manipulation
+A swap route is changed after user approval.
+Mitigations:
+* Include route hash in signed payload.
+* Include asset in and asset out.
+* Include min amount out.
+* Include max slippage.
+* Include router contract.
+* Display route summary before signing.
+23.4 Threat: Malicious Protocol Call
+A malicious target contract is inserted into a transaction.
+Mitigations:
+* PolicyManager protocol allowlist.
+* Signed target contract.
+* Signed function name.
+* App-side review screen.
+* Contract-side verification.
+23.5 Threat: Lost Card
+A user loses their physical card.
+Mitigations:
+* Emergency lock.
+* Optional external wallet association.
+* Revocation flow.
+* Future recovery module.
+* Limits on high-risk actions where implemented.
+23.6 Threat: Stolen Card
+A card is stolen and used by someone else.
+Mitigations:
+* Optional app-level authentication.
+* Optional transaction limits.
+* Optional external wallet co-approval for high-risk actions.
+* Emergency lock.
+* Revocation flow.
+* Clear user education.
+23.7 Threat: Compromised iOS App
+A compromised app tries to make the card sign malicious actions.
+Mitigations:
+* Action-specific payload display.
+* Signed payload includes exact action.
+* Contract-side policy checks.
+* Protocol allowlist.
+* Amount and destination binding.
+* Optional limits.
+* User-visible transaction review.
+23.8 Threat: Compromised Backend
+ChimpDAO should minimize backend dependency.
+Mitigations:
+* Critical authorization verified on-chain.
+* No backend custody.
+* Public contract addresses.
+* Public transaction verification.
+* Prefer client-side transaction preparation where feasible.
+* Any API response used for quotes/routes must be bound to signed payloads.
+________________
+
+
+24. Data Model
+24.1 Card Record
+struct CardRecord {
+    card_id: BytesN<32>,
+    public_key: BytesN<33>,
+    card_account: Address,
+    owner_hint: Option<Address>,
+    active: bool,
+    revoked: bool,
+    created_ledger: u32,
+    updated_ledger: u32,
+}
+24.2 Authorization Payload
+struct CardAuthPayload {
+    network_passphrase_hash: BytesN<32>,
+    contract_id: Address,
+    card_id: BytesN<32>,
+    card_account: Address,
+    action_type: Symbol,
+    source_account: Address,
+    target_contract: Address,
+    target_function: Symbol,
+    asset: Address,
+    amount: i128,
+    destination: Option<Address>,
+    strategy_or_pool_id: Option<BytesN<32>>,
+    route_hash: Option<BytesN<32>>,
+    min_amount_out: Option<i128>,
+    max_slippage_bps: Option<u32>,
+    nonce: BytesN<32>,
+    expiration_ledger: u32,
+}
+24.3 Policy Record
+struct PolicyRecord {
+    card_account: Address,
+    allowed_assets: Vec<Address>,
+    allowed_protocols: Vec<Address>,
+    allowed_actions: Vec<Symbol>,
+    transfer_limits: Map<Address, i128>,
+    defi_limits: Map<Address, i128>,
+    locked: bool,
+}
+These structures are representative. The final implementation may use optimized storage types and Soroban-specific data structures.
+________________
+
+
+25. Repository Implementation Plan
+25.1 chimpdao-contracts
+The existing contracts repository will be extended from physical NFT ownership into card wallet authorization.
+Planned additions:
+* CardRegistry module.
+* CardAccount / smart wallet module.
+* NonceManager.
+* PolicyManager.
+* DeFiRouter.
+* DeFindex adapter.
+* Soroswap adapter or integration helper.
+* Blend adapter or proof-of-concept interface.
+* Recovery and revocation primitives.
+* Testnet deployment scripts.
+* Mainnet deployment scripts.
+* Contract documentation.
+* Contract ID registry in README.
+Expected tests:
+* Card registration.
+* Card activation.
+* Valid card signature verification.
+* Invalid signature rejection.
+* Wrong card rejection.
+* Revoked card rejection.
+* Replayed nonce rejection.
+* Expired payload rejection.
+* Wrong target contract rejection.
+* Wrong amount rejection.
+* Unsupported asset rejection.
+* Unsupported protocol rejection.
+* Transfer execution.
+* DeFindex deposit authorization.
+* DeFindex withdrawal authorization.
+* Soroswap route authorization.
+* Blend proof-of-concept where implemented.
+* Emergency lock.
+* Recovery or revocation.
+25.2 chimpdao-ios
+The existing iOS repository will be extended into the ChimpDAO Card Wallet app.
+Planned additions:
+* Card activation screen.
+* Card dashboard.
+* NFC/APDU signing abstraction.
+* Card profile storage.
+* Stellar account service.
+* Stellar RPC service.
+* Transaction builder.
+* Simulation and submission service.
+* Balance screen.
+* External wallet association screen.
+* Funding screen.
+* Soroswap quote screen.
+* Soroswap review screen.
+* DeFindex strategy list.
+* DeFindex deposit screen.
+* Position dashboard.
+* Withdrawal screen.
+* Transaction history.
+* Error handling.
+* TestFlight build for reviewers or testers where appropriate.
+Expected iOS tests and validation:
+* NFC scan success.
+* NFC scan failure.
+* Signature request success.
+* Signature request timeout.
+* Invalid card handling.
+* Activation flow.
+* Balance refresh.
+* Transaction simulation failure.
+* Transaction submission failure.
+* DeFindex deposit flow.
+* DeFindex withdrawal flow.
+* Soroswap swap flow.
+* External wallet association flow.
+25.3 Documentation
+Planned documentation:
+* Technical architecture document.
+* Contract architecture README.
+* iOS architecture README.
+* Testnet demo guide.
+* Mainnet launch guide.
+* Integration guide.
+* Security model.
+* Non-custodial product boundary.
+* User testing report.
+* Known limitations.
+* Future roadmap.
+________________
+
+
+26. Testing Strategy
+26.1 Smart Contract Tests
+Contract tests should cover:
+* Card registration.
+* Public key storage.
+* Activation signature verification.
+* Card-backed authorization.
+* Nonce consumption.
+* Replay rejection.
+* Expiration rejection.
+* Policy enforcement.
+* DeFiRouter authorization.
+* DeFindex adapter behavior.
+* Soroswap adapter behavior.
+* Revocation behavior.
+* Emergency lock behavior.
+26.2 Integration Tests
+Integration tests should cover:
+* Activation transaction on testnet.
+* Funding transaction on testnet.
+* Transfer transaction on testnet.
+* Soroswap swap transaction on testnet or mainnet.
+* DeFindex deposit transaction.
+* DeFindex withdrawal transaction.
+* Wallet association flow.
+* Balance and position refresh.
+26.3 Manual QA
+Manual QA should cover:
+* Real card scan.
+* Real NFC signing.
+* iOS device compatibility.
+* Failed scan recovery.
+* Poor network conditions.
+* App restart during pending transaction.
+* User rejection.
+* Wrong card tapped.
+* Revoked card tapped.
+* Insufficient balance.
+* Protocol error.
+* RPC error.
+26.4 Security-Focused Tests
+Security tests should cover:
+* Reused signature.
+* Modified amount.
+* Modified destination.
+* Modified strategy ID.
+* Modified route hash.
+* Modified asset.
+* Modified target contract.
+* Expired payload.
+* Stolen route response.
+* Locked card.
+* Revoked card.
+* Unauthorized protocol.
+________________
+
+
+27. Deployment Plan
+27.1 Testnet Phase
+The testnet phase will include:
+* Deploy CardRegistry.
+* Deploy CardAccount.
+* Deploy NonceManager / PolicyManager if separated.
+* Deploy DeFiRouter.
+* Configure supported assets.
+* Configure supported protocols.
+* Activate test card.
+* Fund card-linked account.
+* Execute test transfer.
+* Execute Soroswap test flow.
+* Execute DeFindex test flow where available.
+* Document testnet contract addresses.
+* Document transaction examples.
+27.2 Mainnet Phase
+The mainnet phase will include:
+* Final contract review.
+* Final deployment scripts.
+* Mainnet contract deployment.
+* Mainnet contract address documentation.
+* Mainnet card activation.
+* Mainnet balance display.
+* Mainnet DeFindex flow.
+* Mainnet Soroswap flow where available and stable.
+* Mainnet withdrawal flow.
+* Public demo video.
+* User testing.
+* Final documentation.
+________________
+
+
+28. Verification Criteria for Reviewers
+Reviewers should be able to verify progress through:
+* Public GitHub commits.
+* Contract source code.
+* iOS source code where public.
+* Technical documentation.
+* Testnet contract IDs.
+* Mainnet contract IDs.
+* Stellar explorer transaction links.
+* Demo video.
+* Screenshots.
+* TestFlight or recorded iOS demo.
+* DeFindex transaction examples.
+* Soroswap transaction examples.
+* Card activation transaction examples.
+* Card-backed signature demo.
+* User testing report.
+Each tranche will be tied to measurable deliverables.
+________________
+
+
+29. Open Architecture Decisions for Tranche 1
+The following architecture decisions will be finalized during Tranche 1:
+ADR-001: Final Card-Linked Account Model
+Decision between:
+* Full contract account / smart wallet model.
+* Card registry + controlled user account model.
+* Hybrid model.
+Criteria:
+* Security.
+* Protocol compatibility.
+* iOS feasibility.
+* DeFindex compatibility.
+* Soroswap compatibility.
+* Recovery feasibility.
+* Reviewer verifiability.
+ADR-002: Signature Verification Path
+Decision between:
+* Verification inside __check_auth.
+* Explicit verification inside CardAccount functions.
+* Hybrid verification with CardRegistry.
+Criteria:
+* Compatibility with chip signature type.
+* Soroban implementation complexity.
+* Security.
+* Testability.
+* Composability with external protocols.
+ADR-003: Wallet Interoperability Path
+Decision between:
+* Stellar Wallets Kit-compatible flow.
+* Freighter-compatible flow.
+* WalletConnect-style flow.
+* Deep-link funding flow.
+* Signed external wallet proof.
+Criteria:
+* iOS compatibility.
+* User experience.
+* Implementation time.
+* Ecosystem alignment.
+* Reviewer verification.
+ADR-004: DeFindex Integration Method
+Decision between:
+* Direct DeFindex SDK/API integration in the app.
+* Contract-level DeFindex routing.
+* Hybrid app + contract model.
+Criteria:
+* Security.
+* Transaction simplicity.
+* Position display.
+* Contract complexity.
+* User experience.
+ADR-005: Soroswap Execution Method
+Decision between:
+* API-generated routes.
+* SDK-generated transactions.
+* Direct router contract calls.
+* Two-step swap/deposit flow.
+* Composed swap/deposit flow.
+Criteria:
+* Route integrity.
+* Slippage protection.
+* Transaction complexity.
+* Mobile implementation speed.
+* On-chain verifiability.
+________________
+
+
+30. Future Roadmap Outside This Grant
+Future versions may explore:
+* Android app.
+* Multi-card management.
+* Multi-signer recovery.
+* Advanced spending limits.
+* Merchant-facing payment request tools.
+* QR-based Stellar transfer UX.
+* Etherfuse asset display and support.
+* Abroad-style compatibility research.
+* Anchor Platform compatibility.
+* Passkey co-signing.
+* Additional DeFi protocols.
+* Additional Stellar assets.
+* Physical card marketplace.
+* Card-to-card transfers.
+* Enterprise or event use cases.
+These are outside the core funded scope unless explicitly included in later submissions.
+________________
+
+
+31. Ecosystem Impact
+ChimpDAO Card Wallet can create a new access layer for Stellar.
+Instead of interacting with Stellar only through seed phrases, browser extensions, and complex DeFi interfaces, users can interact through a familiar physical object: a card.
+The project can benefit the Stellar ecosystem by:
+* Creating a hardware-secured physical wallet interface.
+* Driving usage to DeFindex vaults.
+* Driving swap volume through Soroswap.
+* Supporting Blend-based yield or lending exposure.
+* Improving wallet onboarding through interoperability flows.
+* Demonstrating a reusable card-backed authorization model.
+* Making Stellar assets feel more tangible.
+* Making DeFi flows simpler for end users.
+* Creating a foundation for future real-world asset and payment-like wallet utility.
+ChimpDAO does not replace Stellar wallets or DeFi protocols.
+It makes them tangible.
+________________
+
+
+32. Summary
+ChimpDAO Card Wallet is an iOS-first physical wallet card for Stellar.
+It builds on ChimpDAO’s existing NFC-authenticated merchandise infrastructure and extends it into a wallet architecture for Stellar assets and DeFi.
+The secure NFC card acts as a hardware-backed signer. The iOS app provides the wallet interface. Soroban smart contracts manage card-linked identity, authorization, policy, and protocol routing. Stellar RPC powers transaction simulation and submission. DeFindex, Soroswap, Blend, and Stellar Wallets Kit-compatible flows connect the product to existing ecosystem building blocks.
+The final result is a bank-card-like user experience without becoming a regulated payment card:
+A non-custodial, hardware-secured physical wallet card for Stellar assets, DeFi, and future real-world utility.

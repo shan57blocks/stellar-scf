@@ -1,0 +1,376 @@
+Source: https://drive.google.com/file/d/1tLV5Zi_L2jGzbPvEhCW985HHOnkYPmoH/view?usp=sharing
+
+BALLAST	RE		·		SCF	#44	OPEN	TRACK		·		JUNE	2026
+baUSD	Technical	Architecture
+A	Soroban-native	vault	for	real-world	reinsurance	yield
+This	document	specifies	the	complete	technical	architecture	of	baUSD.	The	architecture	is	finalized	at	time	of	application;	Tranche	1	is	development,	not
+design.	The	protocol	is	built	end-to-end	on	the	Stellar	stack	and	composes	with	existing	ecosystem	building	blocks	for	distribution,	wallet	access,	liquidity,	and
+cross-chain	inflow.
+1
+Overview
+baUSD	is	a	yield-bearing	token	issued	natively	on	Soroban.	An	allowlisted	institutional	LP	deposits	USDC	on	Stellar	into	a	vault	contract	and	mints	baUSD,	an
+appreciating	share	token	whose	value	rises	as	earned	premium	from	regulated	US	casualty	specialty	reinsurance	treaties	accrues.	Yield	is	uncorrelated	to	crypto,
+equities,	and	interest	rates	because	it	is	sourced	from	insurance	underwriting	profit,	not	token	emissions,	lending	spread,	or	duration.
+The	defining	design	constraint	is	that	
+deposited	capital	does	not	remain	in	the	contract
+.	The	majority	flows	off-chain	into	reinsurance	treaties	through	a
+Bermuda	Class	3A	Segregated	Accounts	Company	(SAC)	and	is	collateralized	in	Reg	114	Trusts.	Consequently	the	vault	holds	only	a	liquidity	sleeve	for	near-term
+redemptions,	the	on-chain	
+total_assets
+	is	an	attested	NAV	rather	than	a	balance	of	held	USDC,	and	redemptions	are	gated	by	an	allowlist	and	a	notice	period
+because	casualty	tail	development	means	capital	cannot	be	returned	on	demand	at	full	value.	This	is	what	separates	baUSD	from	a	synthetic	or	wrapped
+representation:	the	share	token	tracks	attested	treaty	performance,	including	downside.
+2
+Stellar	Relevance	—	Core,	Not	Superficial
+Stellar	is	not	used	for	storage	or	as	a	thin	wrapper.	The	core	financial	logic,	share	accounting,	mint/burn,	NAV	accrual,	and	redemption,	executes	inside	Soroban
+smart	contracts.	baUSD	exists	only	as	a	Stellar	asset,	its	yield-bearing	behavior	is	enforced	on-chain,	and	its	distribution	runs	through	Stellar-native	yield
+infrastructure.	Remove	Stellar	and	there	is	no	product.	The	ecosystem	building	blocks	in	section	6	are	leverage	on	top	of	this	protocol,	not	the	protocol	itself.
+3
+System	Architecture
+
+FRONTEND
+ONCHAIN	·	SOROBAN	/	STELLAR
+OFF-CHAIN	INFRASTRUCTURE	·	BALLAST	RE
+REAL-WORLD	RISK	LAYER
+React	dApp	+
+NAV	Dashboard
+Stellar	Wallets	Kit
+/	Freighter
+baUSD	Vault
+Contract
+baUSD	Token
+SEP-41
+Allowlist	/
+Compliance
+USDC	on	Stellar
+DeFindex
+Strategy	Adapter
+Reflector
+Price	Reference
+Attestation	Service
+NAV	updater
+KYC	/	Onboarding
+Treasury	/	Custody	Ops
+Bermuda	Class	3A	SAC
+Reg	114	Trust
+Retro	tail	cover
+subscribe	/	redeem
+deployable	capital
+attested	NAV
+fund	treaties
+Figure	1.	System	architecture.	Capital	flows	down	to	the	real-world	risk	layer;	attested	NAV	flows	back	up	to	the	vault.
+Layer
+Components
+Responsibility
+Frontend
+React	dApp	+	dashboard,	Stellar	Wallets	Kit	/	Freighter
+Subscribe,	redeem,	view	NAV/position
+Onchain
+Vault	contract,	baUSD	token	(SEP-41),	allowlist	module,	Reflector	reference,
+DeFindex	adapter
+Share	accounting,	mint/burn,	NAV	state,	compliance	gating,
+composability
+Off-chain	infra
+Attestation	service,	KYC	service,	treasury	ops
+NAV	sourcing/attestation,	identity	verification,	capital
+movement
+Real-world	risk
+Bermuda	SAC,	Reg	114	Trust,	retro	cover
+Underwriting,	loss	reserving,	tail	protection
+3.1		baUSD	token	contract	(SEP-41)
+baUSD	is	implemented	as	a	SEP-41-compatible	token	contract.	Mint	and	burn	authority	is	held	exclusively	by	the	vault	contract	(set	as	token	admin);	there	is	no
+discretionary	issuance	path,	so	supply	is	bound	1:1	to	vault	subscriptions	and	redemptions.	
+transfer
+	is	gated	by	the	allowlist	check	(see	3.3);	
+balance
+	and
+allowance
+	are	standard.
+3.2		Vault	contract	(appreciating-share	/	ERC-4626-equivalent)
+The	vault	is	the	core	logic	contract.	baUSD	shares	represent	a	pro-rata	claim	on	the	attested	NAV;	share	value	=	total	assets	/	total	shares.	There	is	no	rebasing,
+balances	are	constant	and	value-per-share	moves.
+shares_minted			=	deposit_usdc	*	total_shares	/	total_assets				
+//	at	subscription
+assets_returned	=	shares_burned	*	total_assets	/	total_shares			
+//	at	redemption
+share_price					=	total_assets	/	total_shares																			
+//	NAV	per	baUSD
+On	first	deposit,	
+share_price
+	initializes	to	1.0	(1	baUSD	=	1	USDC).
+
+State	variable
+Meaning
+total_shares
+total	baUSD	outstanding
+total_assets
+attested	NAV	in	USDC	terms	(off-chain	deployed	+	onchain	sleeve)
+liquidity_sleeve
+USDC	actually	held	onchain	for	redemptions
+nav_last_updated
+ledger	timestamp	of	last	attestation
+attestation_authority
+multisig	permitted	to	update	NAV
+compliance_authority
+key/multisig	permitted	to	manage	allowlist
+admin
+governance	multisig
+paused
+guardian-controlled	circuit	breaker
+redemption_notice
+configurable	notice/lockup	period
+Core	entrypoints
+subscribe(amount)
+	—	allowlist-checked;	pulls	USDC,	mints	baUSD	at	current	share	price
+request_redemption(shares)
+	—	allowlist-checked;	registers	a	redemption	request	and	starts	the	notice	period
+claim_redemption(request_id)
+	—	after	notice	elapses,	burns	baUSD	and	pays	USDC	from	the	sleeve	at	NAV
+update_nav(new_total_assets,	proof_ref)
+	—	attestation-authority	only;	constrained	(see	7.2)
+fund_sleeve(amount)
+	/	
+deploy_capital(amount)
+	—	treasury	ops;	moves	USDC	between	onchain	sleeve	and	off-chain	deployment,	logged	as	events
+set_allowlist_authority
+,	
+set_attestation_authority
+,	
+pause
+,	
+unpause
+,	
+upgrade
+	—	governance/guardian
+3.3		Allowlist	/	compliance	module
+A	module	maintains	the	set	of	KYC-verified	institutional	addresses.	
+subscribe
+	and	
+request_redemption
+	revert	for	non-allowlisted	callers,	and	baUSD	
+transfer
+checks	both	sender	and	recipient,	preventing	secondary	distribution	to	unverified	parties.	The	compliance	authority	adds/removes	addresses	based	on	off-chain	KYC
+completion.
+3.4		NAV	/	yield-accrual	module
+An	authorized	attestation	service	raises	(or	lowers)	on-chain	NAV	from	off-chain	attested	earned-premium	and	reserve	data,	driving	baUSD	appreciation.	The	update
+path	is	constrained	on-chain	(section	7.2)	so	the	largest	trust	assumption	in	the	system	has	a	bounded	blast	radius.
+4
+Capital	&	Value	Flow
+1
+Onboard
+KYC,	allowlist
+2
+Subscribe
+USDC	in,	mint	baUSD
+3
+Deploy
+capital	to	SAC	treaties
+4
+Accrue
+premium	earned,
+NAV	moves	up	or	down
+5
+Redeem
+request,	notice,
+claim	from	sleeve
+baUSD	is	not	pegged;	adverse	loss	development	can	reduce	NAV	and	the	share	price.
+Figure	2.	Capital	lifecycle	from	onboarding	through	redemption.
+Deposit:
+	an	allowlisted	LP	sends	USDC	to	the	vault;	the	vault	mints	baUSD	at	the	current	share	price.
+Deployment:
+	USDC	beyond	the	sleeve	is	applied	off-chain	to	bound	casualty	treaties	via	the	Bermuda	SAC	reinsurer,	recorded	against	on-chain	NAV.
+Accrual:
+	as	treaties	earn	premium,	attested	amounts	update	on-chain	NAV	and	baUSD	share	value	rises.
+Redemption:
+	the	holder	requests	redemption,	the	notice	period	elapses,	then	claims;	the	vault	burns	baUSD	and	releases	USDC	at	NAV	from	the	sleeve.
+Requests	beyond	available	sleeve	liquidity	queue	until	it	is	refunded	from	off-chain,	reflecting	reinsurance	tail	timelines.
+Downside:
+	adverse	loss	development	reduces	attested	
+total_assets
+,	so	
+update_nav
+	can	lower	the	share	price.	baUSD	is	not	pegged	and	does	not	guarantee
+principal;	it	tracks	treaty	performance	behind	the	collateral	waterfall.
+5
+Yield	Mechanism
+baUSD	uses	an	appreciating-share	model,	not	rebasing:	total	vault	assets	grow	as	premium	is	earned,	so	each	baUSD	redeems	for	more	USDC	over	time.	The	6%+
+APY	target	is	net	earned	reinsurance	premium,	not	token	emissions,	lending	spread,	or	T-bill	duration,	which	is	the	source	of	its	non-correlation	to	crypto	and	rates.
+
+6
+Ecosystem	Composability	&	Distribution
+baUSD	composes	with	existing	Stellar	building	blocks	rather	than	rebuilding	them.	Funded	items	sit	inside	the	$85K	award	scope	(Tranche	2,	testnet/feature-
+complete);	roadmap	items	are	post-mainnet	composability	expansions,	scoped	with	their	published	integration	times	and	deliberately	kept	out	of	award	scope	so
+the	budget	stays	matched	to	team	and	timeline.
+Building	block
+Category
+How	baUSD	composes
+Est.	time
+Status
+DeFindex	(Palta	Labs)
+DeFi	/	Yield
+baUSD	published	as	a	DeFindex	Strategy	conforming	to	the	strategy
+interface,	so	any	DeFindex-integrated	wallet	or	app	can	allocate	into
+baUSD	and	surface	reinsurance	yield.
+1–2	weeks
+Funded	·	Tranche	2
+Stellar	Wallets	Kit
+Wallet
+Multi-wallet	connect	layer	in	the	dApp	(Freighter,	xBull,	Albedo)	for	a
+single	auth	flow.
+Under	1	day
+Funded	·	Tranche	2
+Freighter	Connect	(SDF)
+Wallet
+Primary	Soroban	browser	wallet	for	direct	vault	interaction.
+1–2	weeks
+Funded	·	Tranche	2
+Blend	v2
+DeFi	/	Lending
+baUSD	onboarded	as	a	collateral	asset	so	holders	can	borrow
+against	reinsurance	yield	without	exiting	the	position.
+1+	month
+Roadmap	·	post-mainnet
+Soroswap	(Palta	Labs)
+DeFi	/	Liquidity
+baUSD/USDC	pair	plus	routing	aggregating	Soroban	and	classic
+liquidity.
+1–2	weeks
+Roadmap
+Aquarius
+DeFi	/	Liquidity
+Liquidity	aggregation	and	market	data	for	the	baUSD	pair.
+Under	1	day
+Roadmap
+CCTP	(Circle)
+Cross-chain
+Native	1:1	USDC	inflow	to	Stellar	from	other	chains,	letting	LPs
+holding	USDC	elsewhere	deposit	without	third-party	bridges.
+1–5	days
+Roadmap
+Primary	distribution	—	DeFindex	(funded)
+DeFindex	is	Stellar's	yield	infrastructure	for	wallets	and	DeFi	apps.	baUSD	is	implemented	as	a	DeFindex	Strategy	conforming	to	the	strategy	interface,	validated
+against	the	DeFindex	Quickstart	and	API	Reference,	with	developer	support	via	the	Palta	Labs	Discord.	This	turns	baUSD	from	a	standalone	vault	into	wallet-
+distributable	yield:	any	DeFindex-integrated	wallet	can	offer	reinsurance	yield	without	bespoke	work.	The	adapter	holds	no	custody	logic	of	its	own;	it	calls	the
+vault's	standard	entrypoints.
+Wallet	access	(funded)
+The	dApp	uses	Stellar	Wallets	Kit	for	a	unified	multi-wallet	connect	flow	and	supports	Freighter	Connect	as	the	primary	Soroban	browser	wallet	for	direct	vault
+interaction.	Both	are	quick	integrations	included	in	the	Tranche	2	dApp	deliverable.
+Lending,	liquidity,	cross-chain	(roadmap)
+Post-mainnet,	baUSD	is	onboarded	as	Blend	v2	collateral	(borrow	against	the	position	without	exiting),	paired	on	Soroswap	with	Aquarius	market	data	for	secondary
+entry/exit	before	the	development	period	completes,	and	made	fundable	cross-chain	via	CCTP,	widening	the	addressable	capital	base	while	keeping	settlement	on
+Stellar.
+Oracle	/	price	reference
+baUSD's	NAV	is	set	on-chain	by	the	constrained	attestation	authority.	For	external,	verifiable	price	discovery	used	by	downstream	integrators,	baUSD's	share	price	is
+published	via	Reflector,	the	de-facto	Stellar	oracle.	Oracles	are	not	a	category	on	the	SCF	Integration	List;	Reflector	is	noted	for	completeness,	not	claimed	as	a
+listed	building	block.
+7
+Security,	Risk	&	Trust	Model
+7.1		Roles	and	separation	of	duties
+
+Vault
++	Allowlist	module
+Governance	Multisig
+admin	/	owner
+Guardian
+circuit	breaker
+Attestation	Authority
+m-of-n	multisig
+Compliance	Authority
+KYC	gating
+Treasury	Ops
+capital	movement
+upgrade,	set	authorities
+pause	only
+update_nav	only
+allowlist	only
+sleeve	in/out	only
+Figure	3.	Each	authority	is	scoped	to	the	minimum	surface	it	needs.	Attestation	can	move	NAV	but	not	funds;	treasury	can	move	the	sleeve	but	not	NAV;	compliance	gates	addresses
+but	touches	neither.
+The	attestation	authority	can	move	NAV	but	cannot	move	funds;	treasury	ops	can	move	the	sleeve	but	cannot	set	NAV;	compliance	can	gate	addresses	but	touches
+neither	funds	nor	NAV.
+7.2		NAV	attestation	constraints
+The	attested	NAV	is	the	single	largest	trust	assumption,	constrained	on-chain	to	limit	blast	radius:
+Bounded	delta:
+	
+update_nav
+	reverts	if	the	change	exceeds	a	configurable	per-update	cap,	forcing	large	moves	to	be	staged	and	visible.
+Multisig:
+	attestation	authority	is	an	m-of-n	multisig,	not	a	single	key.
+Freshness:
+	updates	carry	a	timestamp;	consumers	and	Reflector	can	treat	NAV	beyond	a	max	age	as	stale/invalid.
+Proof	reference:
+	each	update	logs	a	
+proof_ref
+	(hash/URI	of	the	supporting	earned-premium	and	reserve	attestation)	for	auditability.
+Monotonicity	not	assumed:
+	NAV	can	decrease.	Downward	updates	are	explicitly	permitted	so	the	token	reflects	real	losses	rather	than	masking	them.
+7.3		Other	controls
+Smart-contract	security:
+	independent	audit	via	the	SCF	Audit	Bank	(not	in	budget),	with	remediation	before	mainnet.
+Access	control:
+	vault-bound	mint/burn	authority;	allowlist-gated	subscription	and	redemption;	Soroban	
+require_auth
+	on	all	privileged	calls.
+Reentrancy:
+	checks-effects-interactions	ordering;	state	updated	before	external	token	transfers.
+Pausability:
+	guardian	can	pause	subscribe/redeem	in	an	incident	without	touching	balances.
+Upgradeability:
+	Soroban	contract	upgrade	gated	behind	the	governance	multisig	and	a	configurable	timelock,	giving	holders	advance	notice	of	code	changes.
+Liquidity	risk:
+	the	redemption	notice	period	and	sleeve	sizing	are	the	buffer	against	a	redemption	rush	exceeding	onchain	liquidity;	excess	requests	queue	until
+the	sleeve	is	refunded.
+7.4		Off-chain	trust	assumptions	(explicit)
+Disclosed	rather	than	engineered	away:	accuracy	of	earned-premium	and	reserve	data	feeding	attestation	(mitigated	by	independent	actuarial	review);	custody	and
+movement	of	off-chain	capital	by	treasury	ops;	solvency	and	claims-paying	behavior	of	the	SAC,	backstopped	by	the	collateral	waterfall	(earned	premium	reserves,
+Reg	114	Trust	loss	reserves,	segregated-account	structure,	retrocessional	tail	cover).
+8
+Compliance	&	Proof	of	Reserves
+Institutional	LPs	are	KYC/AML-verified	off-chain;	verified	addresses	are	allowlisted	on-chain	for	subscription	and	redemption.	The	Bermuda	SAC	/	BVI	structure
+provides	the	regulated	wrapper	for	the	underlying	reinsurance	activity.	A	Stellar	Info	File	(SEP-1	stellar.toml)	will	be	published	for	the	baUSD	asset	linking	to	third-
+party	proof	of	backing,	the	independent	actuarial	review	plus	Reg	114	Trust	reserve	confirmation,	prior	to	mainnet.
+9
+Deployment	&	Open	Source
+
+Local	tests
+unit	+	integration
+Testnet
+Tranche	1	&	2
+Audit	Bank
+post-testnet
+Mainnet
+Tranche	3
+Open	source
+tagged	release
+Figure	4.	Deployment	pipeline.	Apache-2.0	contracts	are	public	from	testnet;	tagged	with	deployment	addresses	at	mainnet.
+MVP	(Tranche	1):
+	vault	+	token	+	tests	on	testnet;	deposit,	mint,	redeem	demo.
+Testnet	/	feature	complete	(Tranche	2):
+	NAV	attestation,	allowlist	gating,	Reflector	reference,	DeFindex	strategy,	Stellar	Wallets	Kit	+	Freighter	dApp.
+Mainnet	(Tranche	3):
+	verified	deployment,	public	NAV	API	+	dashboard	+	monitoring/alerting,	developer	docs,	first	real	USDC	deposit.
+Open	source:
+	all	Soroban	contracts	released	under	Apache-2.0,	public	from	testnet	(Tranche	2),	fully	tagged	and	documented	with	deployment	addresses	at
+mainnet	(Tranche	3).	Off-chain	underwriting	models,	attestation	data	pipelines,	and	proprietary	risk	logic	remain	proprietary	and	outside	the	published	scope.
+10
+Why	Stellar
+Low,	predictable	fees	suited	to	frequent	NAV	updates	and	institutional	settlement.
+Leading	tokenized-RWA	ecosystem	(Franklin	Templeton	BENJI,	Ondo	USDY,	WisdomTree);	reinsurance	premium	is	the	logical	next	RWA	yield	vertical,	yielding
+more	than	tokenized	treasuries.
+DeFindex	distribution	turns	baUSD	into	productive,	wallet-accessible	yield	rather	than	idle	TVL.
+A	deep	set	of	composable	building	blocks	(Blend,	Soroswap,	Aquarius,	CCTP)	lets	baUSD	become	collateral,	liquidity,	and	cross-chain-fundable	over	time.
+A
+Appendix	—	Configurable	Parameters	to	Finalize
+Set	to	real	values	before	submission/build:
+1.	
+Redemption	notice	/	lockup	period	(calibrated	to	casualty	tail	development).
+2.	
+Onchain	liquidity	sleeve	size	as	a	percentage	of	NAV.
+3.	
+NAV	per-update	delta	cap	and	update	cadence.
+4.	
+Attestation	authority	multisig	threshold	(m-of-n).
+5.	
+Upgrade	timelock	duration.
+6.	
+Whether	baUSD	transfers	are	allowlist-gated	on	both	sides	or	subscription-only.

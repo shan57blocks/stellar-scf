@@ -1,0 +1,302 @@
+Source: https://docs.google.com/document/d/1ZL23jXFAD-ZXA1-3iFa6rhqQmABJvZRnk1-yzuStYoc
+
+﻿Trustline Technical Architecture for Stellar
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Introduction        2
+Description of Trustline        2
+Security and insurance-readiness        2
+Scope of this project: adding Stellar/Soroban support        3
+Overview        4
+General description        4
+Current EVM-based flow        6
+Target Stellar/Soroban flow        8
+Tranches and Deliverables        10
+Tranche 1 - MVP        10
+Tranche 2 - Testnet        11
+Tranche 3 - Mainnet        12
+Technical Stack        13
+Frontend        13
+Backend        13
+Smart Contracts (Soroban)        13
+Smart Contracts (EVM)        13
+Publishing / Network Integration (backend)        13
+Security & Trust Model        14
+Trust assumptions        14
+Key management and signer protection        14
+Proof uniqueness and replay protection        14
+Partial compromise scenarios        15
+Operational security        15
+________________
+Introduction
+Description of Trustline
+Trustline is a pre-transaction validation layer for onchain applications. It lets protocols, wallets, and onchain services enforce configurable trust and compliance controls before transactions execute, and produces verifiable onchain evidence that each transaction was approved.
+From a technical standpoint, Trustline provides:
+* A validation API (backend) that evaluates a user’s intended transaction against a configurable policy set (e.g., identity checks, sanctions/AML screening, geo/IP restrictions, wallet risk scoring, MFA/OTP flows, anomaly detection, transaction decoding and user-facing insights).
+* An onchain evidence mechanism that stores short-lived validation attestations so that smart contracts can enforce “only validated intents can execute.”
+* Developer SDKs:
+   * A contract-side integration library to make contracts “Trustlined” (i.e., enforce validation at execution time).
+   * A web frontend SDK to trigger pre-validation and orchestrate the user flow.
+* An optional non-invasive validation enforcement: when the target contract exposes transferable admin/owner/role controls, Trustline can be enforced by deploying a Trustline Firewall that becomes the contract’s sole admin/owner and forwards privileged calls, without requiring changes to the original contract’s code. This solution is adapted to already deployed and/or audited contracts. The Trustline Firewall is never owned or administratively controlled by Trustline. It remains deployed and governed by the client’s own governance setup.
+Trustline’s architecture separates concerns:
+* Off-chain decisioning (fast, configurable, integrates external data sources)
+* On-chain enforcement (deterministic, auditable, composable)
+Security and insurance-readiness
+Trustline is designed not only as a security layer, but also as insurance-readiness infrastructure.
+For institutional onchain finance, insurers need more than a description of the underlying smart contracts. They need to understand who can perform sensitive actions, which policies are enforced before execution, how those decisions are evidenced, and whether controls are auditable after the fact.
+Trustline addresses this by combining:
+* configurable pre-transaction verification;
+* multiple third-party verification providers, such as identity, sanctions, wallet-risk, fraud, geolocation, and MFA providers;
+* deterministic on-chain enforcement through the ValidationEngine and Trustline Firewall;
+* short-lived on-chain validation evidence;
+* auditable policy and transaction records.
+This security and evidence layer is intended to make protected on-chain services easier for traditional insurance-market participants to assess, price, and cover. The long-term objective is to help protocols and asset managers access broader insurance capacity at better pricing than would be possible without enforceable institutional-grade controls.
+Scope of this project: adding Stellar/Soroban support
+This project adds native Stellar support to Trustline by implementing:
+* A Soroban-native ValidationEngine contract to store and serve validation proofs on Stellar.
+* A backend publishing module that writes validation proofs to the Stellar network via Soroban RPC.
+* A Soroban contract SDK (Rust crate) to make Stellar contracts “Trustlined” with minimal code changes.
+* A Trustline Firewall contract allowing to protect already deployed and/or audited contracts exposing transferable admin/owner/role controls.
+* A TypeScript web SDK layer to orchestrate pre-validation and Stellar wallet transaction flows.
+* An open-source example web application showcasing the complete user experience and implementation of the Trustline Stellar validation flow.
+Once completed, Stellar users/builders will be able to:
+* Integrate Trustline validation into Soroban smart contracts and enforce “validated intents only.”
+* Trigger the Trustline pre-validation flow from Stellar-enabled frontends.
+* Produce onchain validation evidence on Stellar (events + storage) that can be audited and relied on by contracts.
+* Build Stellar applications (e.g., token issuers, vaults, governance, DeFi primitives) with a configurable compliance/trust gate similar to the existing EVM integration.
+Stellar-native standards and integration strategy
+Trustline’s Stellar implementation is designed to integrate with the native Stellar/Soroban ecosystem rather than introduce a parallel security model.
+SEP-10 and SEP-45 authentication
+Trustline will support SEP-10 as a native Stellar authentication input for the policy engine. When a user authenticates through a SEP-10 challenge-response flow, Trustline can use the authenticated Stellar account and resulting session context as part of the pre-transaction validation process.
+For contract-account-based flows, Trustline will also consider SEP-45 compatibility where relevant. This allows Trustline policies to distinguish between standard Stellar accounts, custodial or pooled accounts, and contract accounts when evaluating transaction intent.
+SEP-10/SEP-45 authentication does not replace Trustline validation. It provides an authentication signal that can be combined with other policy checks such as KYC, sanctions screening, wallet risk scoring, MFA, geolocation, transaction limits, and anomaly detection.
+Soroban Authorization Framework
+Trustline does not replace Soroban-native authorization. Service contracts should continue to use Soroban authorization primitives such as require_auth and require_auth_for_args to verify that the relevant account authorized the transaction.
+Trustline adds a second layer of enforcement: after native authorization succeeds, the protected contract or Trustline Firewall verifies that the exact transaction intent was pre-validated and recorded in the ValidationEngine.
+This makes Trustline complementary to Soroban authorization:
+* Soroban authorization proves that the relevant account authorized the call.
+* Trustline validation proves that the call passed the configured institutional policy checks before execution.
+* The protected contract enforces both conditions before allowing the sensitive operation to proceed.
+For advanced forwarding flows, the Trustline Firewall will be designed to respect Soroban’s native authorization model for contract-to-contract calls and sub-invocations.
+SEP-56 tokenized vault use case
+Our EVM reference use cases are ERC4626 compatible Tokenized Vaults. A strong equivalent on Stellar is a SEP-56-style Tokenized Vault. Tokenized vaults are a natural fit for Trustline because they involve pooled assets, institutional users, and sensitive operations such as deposits, withdrawals, redemptions, allocator actions, and privileged parameter changes.
+Trustline can provide a configurable policy layer for SEP-56-style vaults, allowing vault operators to enforce rules such as:
+* only validated wallets can deposit;
+* withdrawals above configured thresholds require additional checks;
+* institutional investors must pass KYC/AML and wallet-risk policies;
+* privileged vault operations require stronger validation or MFA;
+* every approved sensitive action leaves on-chain validation evidence.
+The SCF scope focuses on the reusable Trustline infrastructure required to enable this pattern. A SEP-56-compatible vault guard is an ideal reference use case for the testnet PoC, but protocol-specific production integrations remain outside the core milestone scope.
+Anchors and RWA workflows
+Trustline can also support Stellar anchor and RWA workflows as a pre-transaction validation layer. Anchors using SEP-6, SEP-24, SEP-31, SEP-10, SEP-12, or related flows already operate in environments where identity, compliance, transaction limits, and auditability matter.
+In such cases, Trustline can act as an additional policy and evidence layer between the authenticated user, the anchor workflow, and the relevant on-chain transaction. This is a future integration opportunity.
+________________
+
+
+Overview
+General description
+This section describes the main components involved in a Trustlined transaction flow and the role each component plays in the overall system.
+Complete view of the architecture
+  
+
+
+
+
+
+Description of the components
+* The User
+   * The end-user who initiates an action (an intent) and ultimately signs and submits the onchain transaction with their wallet.
+   * Receives the Trustline validation outcome (allow/deny) and any required actions (e.g., OTP/MFA) through the service frontend.
+* Service Frontend (dApp UI)
+   * Allow the end-user to perform actions (interaction with the service smart contract).
+   * Collects intent parameters (contract, method, arguments, user address…) and calls Trustline’s backend for pre-validation.
+   * Guides the user through any interactive steps required by the policy (e.g., OTP/MFA), then lets the user proceed to submit the final onchain transaction via their wallet.
+* Service Smart Contracts (onchain service)
+   * The application contract the user wants to interact with (e.g., token, vault, governance, DeFi primitive).
+   * Enforces Trustline by checking (at execution time) that the current call matches an approved intent (either directly or through a Trustline Firewall).
+   * Calls the ValidationEngine to verify that a valid proof exists and consumes it to prevent replay.
+* Trustline Backend
+   * Evaluates intents against configurable policies (and can require interactive steps such as OTP/MFA).
+   * Integrates external data sources to inform decisions (e.g., identity/KYC, sanctions, wallet risk, fraud/anomaly signals).
+   * When an intent is approved, triggers publication of an onchain proof to the Trustline ValidationEngine and returns the result to the frontend.
+* Trustline Validation Engine (onchain)
+   * A smart contract responsible for persisting short-lived validation proofs and serving verification queries.
+   * Provides deterministic, auditable enforcement: service contracts rely on the ValidationEngine at execution time to allow/deny protected actions.
+* Third-party providers
+   * External services used by the Trustline backend to evaluate intent risk/compliance requirements (e.g., KYC/AML providers, sanctions screening, wallet reputation/chain analytics, geolocation, fraud/anomaly detection, messaging/email for OTP delivery).
+________________
+Current EVM-based flow
+Diagram (EVM) - logical architecture  
+High-level flow (EVM)
+1. The user initiates an action in the frontend (e.g., call a protocol contract).
+2. Frontend calls Trustline Backend for pre-validation with an intent payload.
+3. Backend evaluates the intent (policy engine + data sources) and returns allow/deny.
+4. If allowed, backend publishes an onchain proof by submitting a transaction to the ValidationEngine (via a proxy pattern).
+5. Frontend submits the actual user transaction to either (a) the service contract (direct integration) or (b) a Trustline Firewall that forwards to the service.
+6. The service contract calls the ValidationEngine to verify the proof for this specific transaction exists and is valid.
+7. The transaction executes only if validation passes.
+Components (EVM)
+* Frontend: React/TypeScript + Trustline web SDK
+* Backend: Kotlin / Ktor
+* Publishing (EVM): Web3j / ECDSA proof signatures
+* Validation Engine (EVM): Solidity contracts using OZ libraries + ERC1967 proxy
+* Developer SDK (EVM):
+   * Web3SDK NPM package: Contract-side integration patterns (Trustlined base)
+   * WebSDK NPM packages: Frontend integration toolkit to build intents, call the Trustline pre-validation API, and orchestrate the user transaction flow (UX prompts/insights, status polling, and error handling).
+   * Trustline Firewall (EVM, optional): Solidity wrapper contract that becomes owner/admin/role-holder of the protected service and forwards calls after Trustline verification.
+________________
+Target Stellar/Soroban flow
+Diagram (Stellar) - logical architecture  
+The Stellar implementation replicates the same core pattern:
+* Off-chain pre-validation by Trustline backend
+* On-chain evidence published to Stellar via Soroban
+* On-chain enforcement by service contracts or Trustline Firewall calling the Soroban ValidationEngine
+Key Stellar-specific differences:
+* Publishing and user transactions are executed via Soroban RPC (the user transaction lifecycle is handled by the dApp/wallet; the WebSDK does not sign or submit user transactions).
+* Stellar workflows typically include a simulateTransaction step to obtain footprint/resources before submission.
+* Proof storage benefits from Soroban temporary storage (TTL-based), naturally matching short-lived validations.
+* Contract upgrade patterns differ (Soroban supports updating contract WASM under admin authorization).
+Stellar-specific components
+* Soroban ValidationEngine (Rust): stores validation entries keyed by a deterministic intent hash.
+* Backend Stellar publisher (Kotlin):
+   * Builds InvokeHostFunction to record_validation
+   * Runs simulateTransaction and assembles the final transaction
+   * Signs and submits, then polls transaction status
+* Soroban contract SDK (Rust crate):
+   * Cross-contract client to ValidationEngine for proof verification
+* Trustline Firewall (Soroban): wrapper contract used for non-invasive enforcement on admin/role-gated service contracts (owner/role transferred to firewall), forwarding calls after proof verification.
+* WebSDK (TS):
+   * Constructs intent payloads
+   * Calls backend pre-validation endpoints
+   * Returns validation outcomes to the dApp/wallet
+________________
+Tranches and Deliverables
+Tranche 1 - MVP
+Deliverable 1 - Soroban ValidationEngine (core contract)
+* Brief description: Implement the Soroban-native ValidationEngine contract responsible for recording and serving validation proofs (short-lived or TTL-based), emitting events, and exposing verification functions callable by service contracts.
+* How to measure completion:
+   * Source code published in the project repository
+   * Contract compiles and deploys to Stellar test environments
+   * Public functions available to validate and register proofs, allow another contract to check the validity of a transaction, and consume the proof associated with a validated transaction.
+   * Unit tests covering success/failure and expiry paths
+   * Contract interface documented (README + function specs)
+* Estimated date of completion: Mid Month 1
+* Budget: $17,800 (engineering)
+Deliverable 2 - Backend Stellar publishing module (Soroban RPC)
+* Brief description: Add a Stellar/Soroban publisher module to the Kotlin/Ktor backend that can publish validation proofs on-chain by invoking the ValidationEngine contract through Soroban RPC.
+* How to measure completion:
+   * A pre-validation endpoint compatible with stellar is available on Trustline’s backend
+   * A minimal harness that calls the pre-validation endpoint and triggers proof publication, so reviewers can reproduce the MVP flow
+   * Documentation for RPC endpoints
+* Estimated date of completion: End of Month 1
+* Budget: $16,500 (engineering + infra)
+Deliverable 3 - Soroban contract integration SDK (Rust crate)
+* Brief description: Create a reusable Rust crate to make Soroban contracts Trustline-compatible (including a Trustline Firewall contract).
+* How to measure completion:
+   * Published crate source in the repository
+   * Example service contract demonstrating one protected method using the SDK
+   * Trustline Firewall contract included in the repository
+   * Documentation: integration guide + code snippets
+   * Test suite verifying intent hash determinism and verification calls
+* Estimated date of completion: Early Month 2
+* Budget: $10,200 (engineering)
+Budget Tranche 1: $44,500
+Tranche 2 - Testnet
+Deliverable 1 - TypeScript Web SDK (Stellar pre-validation)
+* Brief description: Implement a Stellar-enabled Trustline WebSDK layer to build intent payloads and trigger backend pre-validation from Stellar frontends, including standardized error/status handling for validation outcomes. The SDK manages the validation UX (e.g., OTP/MFA steps) and returns the outcome to the dApp; the dApp/wallet remains responsible for building, simulating, signing, and submitting the user transaction.
+* How to measure completion:
+   * A new package (or module) available in the repository
+   * Documentation for the API
+   * Example frontend flow that: (1) builds intent, (2) calls pre-validation, (3) receives a validation outcome, (4) exposes the result so the user can submit the final on-chain transaction
+* Estimated date of completion: End of Month 2
+* Budget: $24,400 (engineering)
+Deliverable 2 - End-to-end Testnet PoC with reference contracts
+* Brief description: Deliver a working Testnet proof-of-concept demonstrating Trustline enforcement on a representative Soroban service contract, with the preferred reference implementation being a Trustline-protected SEP-56-compatible tokenized vault. The PoC will show how Trustline can gate standardized vault operations and selected privileged vault-management actions through pre-transaction validation and on-chain proof consumption. The vault will be designed with an adapter-ready architecture to demonstrate how future pluggable yield strategies could be supported.
+* How to measure completion:
+   * Reference Soroban contract deployed to Stellar testnet
+   * Public demo frontend (or reproducible local setup) showing allow/deny cases
+   * Runbook describing deployment, configuration, and troubleshooting
+* Estimated date of completion: Mid Month 3
+* Budget: $19,300 (engineering + infra)
+Deliverable 3 - Stellar project onboarding support in Trustline backend/frontend
+* Brief description: Implement/extend a backend onboarding API that enables Stellar/Soroban projects to register with Trustline and configure permissioning for their use case. This includes:
+   * Storing/loading project owner and admin metadata.
+   * Storing project configuration (e.g., Client associated information, Stellar network selection, policies, and service contract identifiers).
+   * Returning the identifiers required by client apps (e.g., Project ID, Client ID, the ValidationEngine contract address/ID if relevant, etc).
+* How to measure completion:
+   * Trustline’s Onboarding Website working to configure Stellar projects
+   * Associated validation flow working as expected according to the configuration provided during onboarding
+* Estimated date of completion: Early Month 4
+* Budget: $23,100 (engineering)
+Budget Tranche 2: $66,800
+Tranche 3 - Mainnet
+Deliverable 1 - Mainnet deployment & operational readiness
+* Brief description: Deploy the ValidationEngine contract to Stellar mainnet and enable mainnet publishing in the backend with production configuration, monitoring, and safeguards.
+* How to measure completion:
+   * ValidationEngine contract deployed on mainnet and addresses published
+   * Backend configured for mainnet Soroban RPC and able to publish proofs reliably
+* Estimated date of completion: Mid Month 4
+* Budget: $12,100 (engineering + infra)
+Deliverable 2 - Developer documentation & integration examples
+* Brief description: Provide complete documentation for integrating Trustline into Soroban contracts and Stellar-enabled frontends, including example repositories.
+* How to measure completion:
+   * Documentation published in repository (integration guide, API reference)
+   * At least one end-to-end example project (contract + backend + frontend)
+   * Clear instructions to reproduce on mainnet-like settings
+* Estimated date of completion: End of Month 4
+* Budget: $10,200 (engineering)
+Budget Tranche 3: $22,300
+________________
+Technical Stack
+Frontend
+* Language/Framework: TypeScript / React / ether.js / JS Stellar SDK
+Backend
+* Language/Framework: Kotlin / Ktor
+Smart Contracts (Soroban)
+* Language/Framework: Rust / Soroban SDK
+Smart Contracts (EVM)
+* Language/Framework: Solidity / Foundry / OpenZeppelin Libraries
+Publishing / Network Integration (backend)
+* Stellar: Soroban publishing via Java Stellar SDK
+* EVM: EVM publishing via Web3j
+________________
+Security & Trust Model
+Trust assumptions
+Trustline is designed as a pre-transaction validation and enforcement layer. It does not custody user funds and does not sign user transactions. The user always remains responsible for signing and submitting the final transaction through their wallet.
+The Trustline backend is responsible for evaluating an intended transaction against the configured policy set and, when the intent is approved, publishing a short-lived validation proof to the onchain ValidationEngine. The protected service contract, or the Trustline Firewall, remains the final enforcement layer: execution only succeeds if the onchain proof matches the exact transaction intent being executed.
+The system is designed to fail closed. If validation is unavailable, if a proof has expired, if a proof has already been consumed, or if the transaction does not match the validated intent, the protected operation must not execute.
+Key management and signer protection
+For the Stellar implementation, the production publisher key used to record validations on the Soroban ValidationEngine will be protected through either GCP KMS or DFNS (MPC provider). The selected signer infrastructure will prevent raw production private keys from being exposed to developers or application code.
+Production access is protected through Google Cloud IAM, MFA, least-privilege service accounts, and separation between staging and production environments. Only the backend publishing service will be authorized to request production validation publications. Human access to production infrastructure will be limited and auditable.
+Before mainnet deployment, Trustline will define an operational runbook covering signer provisioning, access review, emergency revocation, environment separation, and recovery procedures.
+Proof uniqueness and replay protection
+Each validation proof is bound to a deterministic intent hash. The intent hash is designed to include the relevant execution context, including the Stellar network, ValidationEngine contract ID, protected contract ID, method name, canonical serialized arguments, caller address, project or client identifier, policy version, nonce or request identifier, and expiry timestamp.
+Proofs are short-lived and single-use. The ValidationEngine stores the proof with an expiry/TTL, and the protected contract or Trustline Firewall consumes the proof during execution. Once consumed, the same proof cannot authorize another transaction. If the same frontend request, calldata, or validation result is replayed, execution fails because the proof has either expired, already been consumed, or does not match the exact intent hash.
+Partial compromise scenarios
+Trustline’s threat model assumes that different components may fail or be partially compromised. The architecture limits the impact of each scenario:
+   * If the frontend is compromised, the user still signs the final transaction in their wallet, and the protected contract only accepts calls matching the validated intent.
+   * If the backend API is compromised but the publisher signer remains protected, the attacker cannot publish valid onchain proofs.
+   * If a third-party policy provider is unavailable, critical policies can be configured to fail closed.
+   * If the publisher signer is compromised, the attacker could attempt to publish fraudulent approvals. Mitigations include project-level allowlists, method-level policies, transaction limits, monitoring, emergency key revocation, and the ability to disable or replace the publisher configuration.
+   * If the Soroban RPC provider is unavailable, proof publication may be delayed, but unvalidated protected transactions will not execute.
+Operational security
+The production backend uses separate staging and production environments, Google Cloud IAM, MFA, least-privilege access, environment-specific service accounts, and audit logs. Operational monitoring covers proof publication failures, abnormal validation volume, repeated denied requests, expired proof attempts, replay attempts, and publisher errors.
+Trustline will also maintain emergency procedures for disabling validation publication, rotating or revoking publisher credentials, pausing affected project configurations, and notifying impacted integration partners.

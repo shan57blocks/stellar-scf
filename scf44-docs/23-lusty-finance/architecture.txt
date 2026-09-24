@@ -1,0 +1,409 @@
+Source: https://docs.google.com/document/d/1reBUmKFLi-e2t2wrnDshMFH67w4G24sp/
+
+﻿Lusty Finance
+Technical Architecture Document
+Hybrid options infrastructure on Stellar — covered calls on XLM and cash-secured puts on LUSD, priced by one source-of-truth quote engine. A tested Soroban contract provides trustless on-chain settlement; the live app runs today on a classic-escrow rail while that contract is wired in.
+1. What Lusty is
+Lusty is a yield protocol for option writers on Stellar. A user deposits collateral, writes an out-of-the-money option against it, and is paid the premium upfront — in cash, in the same transaction. Covered calls are written on XLM; cash-secured puts are written on LUSD, the protocol's testnet US dollar. Options expire weekly on Fridays, and the strike ladders, premiums, and APR are all priced from live market data rather than a hand-set table.
+Two products, one engine. A covered call escrows XLM and pays the writer for the right to buy that XLM at the strike. A cash-secured put locks LUSD and pays the writer for the obligation to buy XLM at the strike if it falls. Both sides quote through the same pricing path, so what the screen shows is exactly what the vault pays.
+Around the vault. Lusty also ships a classic-DEX swap (XLM ⟷ LUSD over path payments), a points leaderboard, an AI research desk that writes daily market commentary from a live price feed, and a testnet faucet. These are conveniences built on the same Stellar plumbing — the vault is the product.
+Where the money lives. The protocol is built around two rails. What the live app runs today is a classic-escrow rail: collateral is paid to a distributor account and the upfront premium is paid back server-side, for both calls and puts. In parallel, a Soroban contract — built, unit-tested, and deployed on testnet — closes the same loop on-chain with no custodial account; it is the trustless target the classic rail migrates onto. Section 3 sets out exactly what is live versus what is the destination.
+Revenue. Lusty keeps an edge on every option it writes. Part of it is explicit — a commission carved out of the upfront premium and sent to a fee wallet. The rest is implicit — the vault sells volatility above realized and pays the writer below the model premium. A configurable volatility premium and a protocol haircut compensate the vault for unhedged option risk; they reduce, but do not eliminate, the chance of a loss in a tail event. Section 5 makes the exact split auditable.
+2. Architecture at a glance
+The system separates cleanly into three layers: the Stellar primitives Lusty builds on, the Lusty backend and pricing engine that orchestrate everything, and the external services it reads but never reimplements.
+Layer 1 — Stellar / Soroban primitives
+* Soroban vault contract — the trustless settlement layer. Holds collateral, pays premiums from its own cash pool, and settles each position from the oracle price at expiry.
+* Stellar Asset Contracts (SACs) — native XLM and LUSD as Soroban-callable tokens, used for every collateral and cash transfer.
+* Horizon + classic operations — account loading, payments, path-payment swaps, and trustline management for the off-chain rail and the swap product.
+Layer 2 — the Lusty backend (what this codebase is)
+* Quote engine — the single source of truth for every premium and APR (Section 5). Realized-vol estimator, forward curve, Black-76 pricer, haircut and utilization logic in one deterministic path.
+* Next.js app + API routes — server routes for quotes, deposits, claims, swaps, stats, leaderboard, research, admin, and a monitoring cron; a React front end for the user.
+* Risk plane — a DB-backed circuit breaker, a scheduled monitor, and automatic halt triggers that can stop deposits without a human in the loop.
+* State + accounting — a Postgres (Supabase) store of users, transactions, an idempotency ledger, the breaker row, and a leaderboard view.
+Layer 3 — external services (integrated, not rebuilt)
+* Reflector oracle — the settlement price source, read by both rails so a position settles at the same number wherever it lives.
+* Binance public API — spot candles for realized vol and the perpetual funding rate for the forward; never on the custody path.
+* Google Gemini — generates the research desk's daily commentary.
+* Slack + Resend — best-effort alert delivery for the monitor.
+ fig1_architecture.png 
+
+Figure 1: The three layers. The grant-relevant work lives in Layer 2 and the Soroban contract in Layer 1; Layer 3 is consumed through well-defined feeds.
+3. The two settlement rails
+Lusty is designed around two rails that share one pricing engine and one expiry-pinned settlement reference, so their intended economic outcomes line up. Their trust assumptions, however, are not the same — and only one of them is what the live app uses today.
+Classic-escrow rail (live today). Every deposit in the running web app — covered calls and cash-secured puts alike — is a plain classic payment of collateral to a distributor account, after which the server verifies the payment, reprices through the quote engine, and pays the upfront premium back from the distributor. It depends on server-operated escrow, the distributor key, and the payout service being available; settlement is performed by the backend against the expiry-pinned oracle reference.
+Soroban rail (built and tested; the trustless target). A v2 Soroban contract closes the same loop on-chain: it escrows the collateral, pays the premium atomically from its own cash pool inside deposit(), and settles permissionlessly from the Reflector price at expiry — no custodial account, no server payout to trust. It is deployed on testnet with a full unit-test suite and reads the same oracle, but it is not yet the path the web app's deposits flow through. Wiring the app onto it is the migration this architecture is built for.
+Why the distinction matters. Because both read the same expiry-pinned oracle, a position's payoff is the same on either rail. But the rails differ in more than custody: the Soroban rail enforces custody and settlement on-chain and is permissionless and censorship-resistant, while the classic rail temporarily relies on server-operated infrastructure whose availability and key security are part of the trust model. This document is explicit throughout about which behavior is live and which is the target.
+4. End-to-end flows
+ fig2_lifecycle.png 
+
+Figure 2: A covered call end to end on the Soroban rail (the trustless target) — quote, atomic deposit, and oracle-decided settlement into a kept or assigned outcome.
+4.1 Writing a covered call (Soroban rail — the trustless target)
+This is how the on-chain contract works. A single deposit is one atomic transaction that the writer and the protocol's pricing key co-sign:
+1. UI fetches a live quote        GET /api/vault/quote  (engine → strike, premium, APR)
+2. Writer picks a strike + expiry from the priced ladder
+3. deposit(owner, amount, strike, expiry, premium)   one Soroban tx
+     • owner.require_auth()        writer authorizes the collateral transfer
+     • quoter.require_auth()       pricing key co-signs the premium (RFQ)
+     • collateral XLM → contract escrow
+     • premium (cash) → writer, from the contract pool   (atomic)
+4. Server records the position; caps + idempotency updated
+5. At expiry: settle(id)  — permissionless, oracle-decided
+The dual-auth detail. deposit() requires authorization from both the writer and the quoter (the pricing engine's key). Neither side can set the premium alone — the writer cannot mint themselves a free premium, and the protocol cannot escrow the writer's collateral without paying the agreed price. It is an on-chain RFQ. Crucially, custody and settlement never depend on the quoter; a compromised quoter can misprice, but it cannot move escrowed collateral.
+What the live app does today. The running web app performs the equivalent deposit on the classic rail: the writer sends collateral to the distributor account, the server reprices through the same engine, and the premium is paid back server-side (see Section 3 and the API surface in Section 11). The Soroban flow above is the trustless path that replaces it.
+4.2 Settlement and claim
+settle(id) is permissionless and enforces standard covered-call economics from the Reflector price at the expiry timestamp:
+Outcome
+	Condition
+	Collateral
+	Writer receives
+	Kept
+	Price at/below strike
+	Returned whole to the writer
+	Keeps the premium
+	Assigned
+	Price above strike
+	Goes to the treasury
+	Strike value in cash + the premium
+	Blocked
+	Oracle stale or empty
+	Stays escrowed; settlement refused
+	—
+	Because the settlement price is pinned to the expiry timestamp, the writer gains nothing by delaying the claim. A stale or missing feed fails closed — the contract refuses to settle rather than settle at a wrong price.
+4.3 Swap (XLM ⟷ LUSD)
+The swap is a classic Stellar DEX trade, not a vault operation. Horizon's path-finder returns a live quote between the two assets; the user signs a pathPaymentStrictSend with a slippage-bounded minimum, and the trade clears against the network's order book and liquidity pools. No protocol liquidity is required.
+5. The quote engine — the single source of truth
+Every premium the vault pays and every APR the UI shows flows through one file (pricing-server.ts). There is no second adjustment layer between what the engine returns and what the writer is paid. The pipeline is explainable end to end:
+σ_realized   ←  XLM price history          (EWMA realized vol, vol.ts)
+σ_offered    =  σ_realized·(1+spread) + abs (vol risk premium)
+F            ←  perp funding               (forward, forward.ts)
+P_fair       =  Black-76(side, F, K, T, σ_offered)   (model premium)
+c_eff        =  base haircut + utilization response   (clamped)
+P_model      =  P_fair · (1 − c_eff)        (below Black-76 fair value)
+fee          =  P_model · PREMIUM_FEE_RATE  (explicit commission → fee wallet)
+P_user       =  P_model − fee               (what the writer is paid)
+capital      =  call ? spot : strike        (capital at risk)
+APR          =  P_user / capital · 365/days · 100   (net of haircut AND fee)
+ fig3_pipeline.png 
+
+Figure 3: The quote pipeline. One deterministic path produces both the displayed APR and the premium the vault pays — there is no second adjustment layer.
+5.1 Realized volatility (vol.ts)
+Purpose. XLM has no options market, so there is no implied-vol surface to read. The only honest σ comes from XLM's own price history.
+Implementation. Annualized realized volatility from Binance daily candles, estimated with the RiskMetrics EWMA estimator (λ = 0.94, ≈ 30-day center of mass) over a 60-day window, annualized by √365 because crypto trades every day. The number is describable in one sentence — “close-to-close log returns, RiskMetrics EWMA λ=0.94, annualized ×√365” — and it is cached for a few minutes so a burst of quotes does not hammer the feed. If the feed is down and there is no cached value, the money path fails closed rather than price off a fabricated σ.
+5.2 Forward price (forward.ts)
+Purpose. Black-76 prices off the forward F, not spot. XLM has no dated futures, but its perpetual swap encodes the market's carry through the funding rate.
+Implementation. The last funding rate is annualized (3 settlements/day × 365) and spot is rolled to expiry: F = S · exp(fundingAnnual · T). For short-dated weeklies the basis is tiny (F ≈ S), but using the forward keeps the math honest — the engine never assumes a risk-free rate it does not have. If the perp feed is unreachable it falls back to F = S, which is conservative and fabricates nothing.
+5.3 Black-76 and the protocol edge (pricing.ts)
+The canonical pricer is Black-76. The discount factor e^(−rT) is negligible for short-dated weeklies, so the discount rate defaults to zero — the carry lives in the forward, not in an invented rate.
+d1 = [ln(F/K) + (σ²/2)·T] / (σ·√T)
+d2 = d1 − σ·√T
+Call = e^(−rT) · [F·N(d1) − K·N(d2)]
+Put  = e^(−rT) · [K·N(−d2) − F·N(−d1)]
+Two deliberate omissions are worth naming. There is no volatility smile: a smile is read off a real options surface, and XLM has none, so writing one down would be fabricating data. And there is no arbitrary risk-free rate — the old r = 0.05 assumption is gone. Tail risk is carried in the realized-vol spread instead, where it can be measured.
+The protocol edge. The vault carries unhedged option inventory, so it never sells at fair value. The user is paid below the Black-76 premium; the gap is the protocol's buffer against the days an option expires deep in the money. On top of that implicit edge sits an explicit commission taken from the upfront premium and routed to the fee wallet. The displayed APR is net of both, so shown equals paid.
+5.4 The quote pipeline (pricing-server.ts)
+quoteOption() is pure and deterministic given its inputs; the async market data (σ, forward) is fetched once by the callers and passed in, which keeps the money path unit-testable and auditable. The same call feeds both the strike ladder and any single-strike quote, so one σ and one forward back the whole screen. Stability guards keep headline numbers sane: the pricing σ is capped, and the offered APR is bounded and time-scaled so a one-week tenor does not annualize into a number nobody can actually harvest.
+5.5 Strike ladder and APR normalization
+Calls quote at +2 / +6 / +12 / +20% out of the money; puts at −2 / −6 / −12 / −20%. Strikes are rounded to clean, Deribit-style tick sizes off a 1-2-5 ladder so the rungs read as $0.23 or $42, not $0.1768. The nearest rung is pinned to the time-scaled APR ceiling and the whole ladder is scaled by the same factor, so the gradient across strikes is preserved and the displayed APR is reproducible by the deposit route for any strike it reprices. An explicit clamp stops a client from submitting an off-ladder, near-the-money strike whose raw APR would scale above the cap.
+Utilization taper. The offered APR falls as the pool fills — empty pools quote high to attract writers, and a full pool quotes a fraction of that. The taper scales the whole ladder uniformly and moves the paid premium too, because the deposit route passes the real on-chain utilization, not the display value. The protocol always keeps a floor share of fair value.
+5.6 Expiry scheduler (expiries.ts)
+Lusty keeps three rolling Friday expiries open at once (≈1, 2, and 3 weeks out), each its own capacity bucket priced from its own days-to-expiry and utilization. Deposits inside the final two days before a Friday are refused — a server-side floor that stops a last-day rush for high-decay premium the vault cannot price safely. Aggregate utilization is spread across the open expiries front-loaded (100% / 60% / 30%), so the front week's APR drops first as the vault fills.
+6. The on-chain vault (Soroban v2)
+The vault contract is the trustless heart of the protocol. As of v2 all three legs of a covered call are contract-enforced, with no custodial account and no server payout to trust.
+Function
+	Auth
+	What it does
+	fund(from, amount)
+	from
+	Permissionless top-up of the cash pool that pays premiums and assignment payouts. Anyone may add solvency; nobody can take it out except through settlement.
+	deposit(owner, amount, strike, expiry, premium) → id
+	owner + quoter
+	Escrows collateral and pays the premium from the pool in one atomic tx. Fails whole if the pool cannot cover the premium.
+	settle(id) → “kept” | “assigned”
+	none
+	Permissionless settlement from the Reflector price at expiry. Returns collateral or assigns it to the treasury.
+	position(id), config()
+	none
+	Views.
+	Settlement economics. Above the strike the position is assigned: collateral goes to the treasury and the writer receives the strike value in cash — the same payoff as having sold the collateral at the strike. At or below the strike the collateral comes back whole. The writer keeps the premium either way.
+Units. Strikes use the oracle's 14-decimal scale (the same scale as the price feed); collateral and cash are 7-decimal token units, so strike_value = amount × strike / 10^14.
+Known limitation — a mainnet blocker. The quoter key bounds the premium and nothing else does, so a compromised quoter could authorize itself an inflated premium and drain the cash pool. Collateral and settlement stay safe — the quoter can never move escrowed collateral — which is why the pool holds working capital only today. Before any production capital is deposited, the contract must enforce a premium-to-collateral ceiling, a quote expiry (TTL) and nonce for replay protection, address / contract / network binding, and restricted, multi-signature or threshold quoter authorization. These are treated as mainnet gates, not optional hardening (see the mainnet-readiness section).
+The contract is implemented in Rust with soroban-sdk, ships with 17 unit tests including a mock Reflector oracle, and builds to a single wasm that backs both the LUSD-cash and USDC-cash instances (the cash token is a constructor parameter). Deployment addresses are in Section 15.
+7. Settlement price: the Reflector oracle
+Purpose. Reflector is the settlement price source. The off-chain rail and the on-chain contract read the same feed, so a position settles at the same number regardless of which rail it lives on. Binance stays a fallback for settlement and the primary source for quote inputs (realized vol, perp forward) where Reflector has no equivalent.
+Implementation. The server reads the oracle through free Soroban RPC simulation — no transaction is submitted, no fee is paid, and the distributor key is never touched. It descales the feed's 14-decimal price and normalizes timestamps to the feed's 300-second resolution grid.
+Timing-discretion guard. Settlement is pinned to the expiry timestamp. The engine first asks Reflector for the expiry-pinned historical price; only if that record is gone and the claim is prompt (within the one-hour staleness window of expiry) does it accept the live price. For an old expiry whose history has been pruned, it returns null and the caller must fall back to another expiry-pinned source — never to a live price. This removes exactly the timing discretion that pinning is meant to eliminate: a writer who waits cannot settle at a stale-but-fresh-looking market price.
+8. Capacity, caps, and exposure accounting
+Open exposure, not wallet balance. Utilization is computed from the protocol's own record of open positions — the collateral the vault is still on the hook for right now — not from the distributor wallet's raw balance. A raw balance conflates real exposure with faucet XLM, seed capital, and stale test positions, which once drove utilization to six-figure percentages and silently broke the cap check. The honest metric is open notional: deposits that were recorded, have not been claimed (verified against an atomic replay ledger), and have not expired so long ago they are effectively abandoned.
+Epoch caps. Each open Friday expiry is its own capacity bucket. The monthly budget is divided across the open expiries, so a full expiry blocks only itself. Defaults: 1.5M XLM/month for calls and $150k/month for puts, across three open expiries.
+On top of the per-expiry caps, the deposit route enforces a set of guardrails that stop any one actor from concentrating the vault's risk:
+Guardrail
+	Default limit
+	Purpose
+	Per-wallet notional
+	$50,000
+	No single user monopolizes the vault.
+	Per-wallet, per-expiry collateral
+	10,000 XLM / $10,000
+	Cumulative within an expiry; resets each bucket.
+	Per-strike inventory
+	$30,000 notional
+	Stops one strike soaking up the risk budget (delta concentration).
+	Strike bucket grouping
+	1% of price
+	Near-identical strikes can't bypass the per-strike cap.
+	Minimum days to expiry
+	2 days
+	No same-day, high-decay deposits.
+	Premium hard ceiling
+	5,000 LUSD
+	Backstop against a runaway payout even if a check is fooled.
+	Deposit rate limit
+	10 / wallet / hour
+	Throttles abuse.
+	Every cap check fails closed: if the database is unreachable and the engine cannot see real exposure, the deposit is rejected rather than waved through.
+Server-side vs in-contract limits. The 5,000-LUSD premium ceiling and the per-wallet, per-strike, and rate limits above are enforced by the deposit API — they protect the live classic rail. They do not protect the Soroban contract against a compromised authorized quoter, which today is bounded only by the quoter's signature. An in-contract premium-to-collateral ceiling is therefore a mainnet prerequisite, not a live control (see Section 6 and the mainnet-readiness section).
+9. Risk, monitoring, and the circuit breaker
+9.1 The circuit breaker
+A single-row, DB-backed kill switch gates new deposits. When tripped, the deposit endpoint fails closed with a 503. It can be set two ways: manually by an admin, or automatically by the risk triggers below. A manual trip is never auto-cleared — once a human halts the vault, a human has to release it. The breaker state itself fails closed: if the DB is unreachable, the deposit handler treats that as “cannot prove we are safe” and rejects.
+9.2 The scheduled monitor
+A monitoring cron runs an independent set of best-effort checks. A check that fails turns into its own alert — better to be paged about a blind monitor than to silently stop watching.
+Check
+	Warning
+	Critical
+	Horizon reachability / latency
+	Slower than the 4s budget
+	Unreachable — deposits and claims fail closed
+	Database reachability / latency
+	Slower than the 4s budget
+	Unreachable — cap checks fail closed
+	Cap utilization
+	≥ 90% of cap
+	Every open call expiry full
+	XLM volatility spike
+	1h vol ≥ 2× the 24h baseline
+	—
+	9.3 Automatic halt triggers
+Beyond warnings, the monitor can trip the breaker on its own. Each trigger trips the breaker with source = auto, and only an auto trip is auto-cleared once conditions return to normal.
+Trigger
+	Condition
+	Default
+	Volatility spike
+	1h realized vol ≥ N× the 24h baseline
+	3×
+	Oracle stress
+	A single 1-minute move ≥ N%, or feed unreachable
+	10%
+	Per-epoch loss cap
+	USD notional assigned against the vault this epoch ≥ cap
+	$25,000
+	Alert delivery. Alerts fan out to a Slack incoming webhook and to email via Resend. Both channels are optional and best-effort, with an environment label (testnet / mainnet) stamped on every alert. The cron endpoint is gated by a bearer secret and is disabled (fail-closed) when the secret is unset.
+10. Data layer (Postgres / Supabase)
+State lives in a small Postgres schema, created idempotently on first use. The pool is kept deliberately small with tight timeouts so the app fails fast against Supabase's pooler instead of hanging requests.
+Table / view
+	Holds
+	users
+	Wallet addresses, first/last seen, connect count.
+	transactions
+	Every deposit, claim, and faucet action — amount, asset, tx hash, premium, and JSON metadata (strike, expiry, collateral).
+	processed_actions
+	Idempotency ledger keyed by on-chain source hash; the authoritative “settled” marker.
+	circuit_breaker
+	The single-row kill switch (tripped, reason, source, who, when).
+	admin_users
+	Admin address whitelist.
+	desk_notes
+	Generated research commentary (price, 24h change, bias, headline, bullets).
+	leaderboard_view
+	Derived points ranking over transactions.
+	Idempotency. The processed_actions ledger prevents the same on-chain payment from being processed twice. A composite key guards same-endpoint replay; a partial unique index makes deposit and swap mutually exclusive on a source hash (one payment funds a deposit or a swap, never both), while a claim legitimately reuses its deposit's hash to settle that position. The reservation is written before any payout, so it is the authoritative settled marker even if a later transaction-log insert fails.
+Leaderboard points. A derived view scores each address: 1× deposited USD, plus 3× premium earned, plus 0.5× swap volume. Vault writing is rewarded most, swapping least.
+11. Backend API surface
+The Next.js app exposes the following server routes. These are the live classic-rail surface: the deposit and claim routes verify payments, reprice through the engine, and perform the server-side payout. The Soroban contract is invoked directly from the wallet (fund / deposit / settle), not through these endpoints.
+Route
+	Purpose
+	/api/vault/quote
+	Live strike ladder / single quote from the engine (both rails).
+	/api/vault/deposit
+	Classic rail: verify the writer's collateral payment, reprice server-side, pay the premium from the distributor, record the position.
+	/api/vault/claim
+	Classic rail: settle a recorded position from the expiry-pinned oracle and pay out.
+	/api/vault/positions
+	A wallet's open and settled positions.
+	/api/vault/stats
+	Vault TVL, utilization, and per-expiry buckets.
+	/api/swap
+	Path-payment swap quote / build.
+	/api/faucet/lusd
+	Testnet LUSD distribution.
+	/api/leaderboard
+	Ranked points view.
+	/api/research/commentary, /news
+	Gemini market commentary and XLM news.
+	/api/users/connect
+	Record a wallet connection.
+	/api/admin/*
+	Auth, stats, transactions, users, circuit-breaker control, test-alert.
+	/api/cron/monitor
+	Scheduled risk checks + auto-halt evaluation (bearer-gated).
+	/api/health, /api/debug/db
+	Liveness and DB diagnostics.
+	12. Front end and wallet integration
+Stack. Next.js 14 with React 18, TypeScript, and Tailwind. The earn flow, swap, dashboard, research desk, and an admin overlay are built from feature-grouped components, with React hooks (useCoveredCallVault, useCashSecuredPutVault, useVaultStats, useWallet, useXlmPrice) wrapping the contract and API calls.
+Wallets. Wallet connectivity uses the Stellar Wallets Kit, which gives one interface over Freighter, xBull, Albedo, and Lobstr. The app builds transactions server-side or in the lib layer, hands the XDR to the kit for signing by the user's chosen wallet, and submits the signed result. Contract reads use @stellar/stellar-sdk against Soroban RPC.
+Displayed equals paid. The earn UI fetches its APR and premium from /api/vault/quote rather than computing them client-side, and the deposit route reprices from the same engine before paying. There is no path where the screen can promise a number the vault won't honor.
+13. Operational resilience — fail-closed by default
+The recurring design rule across the codebase is simple: when the protocol cannot prove it is safe, it refuses rather than guesses. The same posture shows up everywhere money or risk is involved.
+Layer
+	Primary
+	Fallback
+	Settlement — Soroban rail
+	Reflector, expiry-pinned
+	Reflector lastprice only while fresh (≤ 1h); otherwise settlement stays blocked — there is no off-chain fallback on-chain
+	Settlement — classic rail
+	Reflector, expiry-pinned
+	Binance kline at expiry under a defined policy; never a live price for an old expiry
+	Forward / carry
+	Perp funding rate
+	F = S (carry = 0), nothing fabricated
+	Realized vol
+	Live Binance candles
+	Last cached σ; otherwise fail closed
+	Deposit gating
+	Open breaker + live caps
+	Any DB / Horizon failure → reject the deposit
+	Monitor delivery
+	Slack webhook
+	Resend email; cron disabled if secret unset
+	14. Risk assessment
+Risk
+	Likelihood
+	Impact
+	Mitigation
+	Compromised quoter key over-prices a premium
+	Low
+	Medium
+	Quoter bounds price only — it can never move escrowed collateral. Working-capital-only pool today; an in-contract premium-to-collateral ceiling, quote TTL + nonce, and a multi-sig / threshold quoter are mainnet gates (Sections 6 and 17).
+	Oracle stale or dislocated at settlement
+	Low
+	High
+	Settlement fails closed on a stale/empty feed; expiry-pinning plus a 1h staleness window removes timing discretion; auto-halt on a ≥10% 1-minute move.
+	Realized vol spikes; options underpriced
+	Medium
+	Medium
+	The vol risk premium raises the model premium above raw realized-vol pricing, and the haircut cuts the premium paid to the writer to leave a risk buffer; auto-halt at 3× baseline; per-epoch loss cap halts deposits.
+	Price feed (Binance) unavailable
+	Low
+	Low
+	Short-cache served stale before failing; money path fails closed rather than pricing off a fabricated σ; forward falls back to spot.
+	DB or Horizon outage
+	Low
+	Medium
+	Cap and breaker checks fail closed → deposits rejected; small pool with tight timeouts fails fast; monitor pages on unreachability.
+	Whale concentrates risk on one strike/expiry
+	Medium
+	Low
+	Per-wallet, per-expiry, and per-strike inventory caps; strike-bucket grouping; utilization taper drains APR as a bucket fills.
+	Double-spend / replayed payment
+	Low
+	Medium
+	Idempotency ledger keyed by source hash, reserved before payout; deposit and swap mutually exclusive on a hash.
+	15. Reference data
+15.1 Testnet contract addresses
+What
+	Address
+	Vault v2 (LUSD cash — matches the web app)
+	CAWDKJUH5WSXJVOOAUGULE4HY2TTYSXUSI5QXTDKUZ6J5L4UTXWPK2Y4
+	Vault v2 (USDC cash — mainnet framing demo)
+	CASVHBJ7MOZ5YFSVAYXKZFWIYAR6Y3Q4JI2P6GGJMRFUJBZN6APTZEZD
+	Reflector oracle (external CEX/DEX feed)
+	CCYOZJCOPG34LLQQ7N24YXBM7LL62R7ONMZ3G6WZAAYPB5OYKOMJRN63
+	Native XLM SAC (collateral)
+	CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+	LUSD SAC
+	CDTMNV7F7P3LUH6LLBTXY4EQYBUYGVGYRC7P73HMFV5PXLO5NE6A74QB
+	Test USDC SAC
+	CA7W4C26OTIHHFK3KMP7HGJH63ZD337534OPMGCKDZFNW62BCLRIQL6B
+	Feed asset: Other(“XLM”), 14 decimals, 300-second resolution. On testnet the LUSD instance is product-consistent; on mainnet the cash token is Circle's USDC.
+15.2 Key configuration
+Variable
+	Default
+	Controls
+	VAULT_EPOCHS_PER_MONTH
+	3
+	Number of open Friday expiries.
+	VAULT_CALL_MONTHLY_CAP_XLM
+	1,500,000
+	Monthly covered-call capacity.
+	VAULT_PUT_MONTHLY_CAP_USD
+	150,000
+	Monthly cash-secured-put capacity.
+	VOL_SPREAD_REL / VOL_SPREAD_ABS
+	0.10 / 0.03
+	Vol risk premium over realized.
+	HAIRCUT_BASE
+	0.20
+	Base protocol edge per option.
+	MAX_APR
+	120
+	Ceiling on the offered APR (percent).
+	PREMIUM_FEE_RATE
+	0.10
+	Explicit commission from the upfront premium.
+	MONITOR_VOL_HALT_MULT
+	3
+	Auto-halt vol multiple.
+	MONITOR_ORACLE_JUMP_PCT
+	10
+	Auto-halt 1-minute move.
+	MONITOR_EPOCH_LOSS_CAP_USD
+	25,000
+	Per-epoch assigned-loss halt.
+	15.3 Network configuration
+Environment
+	Horizon
+	Soroban RPC
+	Network passphrase
+	Testnet
+	horizon-testnet.stellar.org
+	soroban-testnet.stellar.org
+	Test SDF Network ; September 2015
+	Mainnet
+	horizon.stellar.org
+	(public Soroban RPC)
+	Public Global Stellar Network ; September 2015
+	16. What is not in scope (today)
+Explicit non-goals, to keep the boundary clear:
+* On-chain cash-secured puts. The v2 contract settles covered calls; puts run on the classic-escrow rail until the contract covers them.
+* Position tokens, upgrade governance, automated pool solvency. Deferred; today ops funds the cash pool via fund().
+* An in-contract premium ceiling and multi-sig quoter. Planned hardening; until then the pool holds working capital only.
+* A volatility smile or a hand-set risk-free rate. Intentionally omitted — neither can be sourced honestly for XLM.
+* Mainnet LUSD. LUSD is a testnet asset; the mainnet cash token is Circle's USDC.
+17. Security validation and mainnet readiness
+This section states what must be proven on testnet and what must be true before any production capital touches the Soroban rail. It answers the three questions a technical reviewer is most likely to ask: are cash-secured puts on-chain (no — they run on the classic rail today, Section 3); how is the compromised-quoter risk closed (the gates below); and how does a Soroban position settle if Reflector cannot return the expiry price (the keeper and recovery policy below).
+17.1 Adversarial testnet
+Before mainnet, the integration runs an open adversarial testnet for at least 14–21 days, with invited security testers, exercising at minimum:
+* Quote replay, inflated-premium signing, and expired-quote acceptance against the Soroban deposit path.
+* Duplicate deposit and settlement double-execution against the idempotency ledger.
+* Oracle stale data, oracle jump / dislocation, and pool-insolvency conditions.
+* Rate-limit, per-wallet, and per-strike cap bypass attempts on the classic rail.
+* Unauthorized configuration / quoter-authorization changes.
+Success criteria. No open critical or high-severity issues; every medium fixed or carrying a documented mitigation; all fund-movement invariant tests passing; and a target number of full settlement lifecycles (deposit → expiry → kept/assigned → payout) completed end to end.
+17.2 Mainnet security gates
+Mainnet deployment is blocked until all of the following hold:
+* An independent smart-contract audit, with a published findings-remediation report.
+* An internal backend security review of the classic rail (distributor key handling, payout path, replay).
+* Contract invariant and fuzz testing covering escrow conservation and premium bounds.
+* In-contract controls: a premium-to-collateral ceiling, quote TTL + nonce, address / contract / network binding, and an emergency pause.
+* Restricted quoter authorization — multi-signature or threshold — plus a documented key and role-management policy and a deployment checklist.
+17.3 Settlement liveness — the keeper
+Why it is needed. Reflector retains roughly 24 hours of historical price records. settle() is permissionless, so a position can be settled by anyone, but if no one settles it before the expiry record is pruned, the on-chain path can no longer read the expiry-pinned price and the position cannot settle on-chain (it fails closed rather than settling at a wrong price).
+Mitigation. A permissionless keeper calls settle() shortly after each expiry, well inside the oracle's retention window, so positions finalize while the correct price is still queryable. The keeper has no privileged access — it only triggers the same permissionless settlement any participant could — so it is a liveness aid, not a trust dependency. A documented on-chain recovery policy covers the residual case where a record is unavailable.
+18. References
+Stellar Developer Docs: https://developers.stellar.org
+@stellar/stellar-sdk: https://www.npmjs.com/package/@stellar/stellar-sdk
+Soroban (smart contracts): https://developers.stellar.org/docs/build/smart-contracts
+Reflector oracle network: https://reflector.network
+Stellar Wallets Kit: https://github.com/Creit-Tech/Stellar-Wallets-Kit
+Black-76 model: https://en.wikipedia.org/wiki/Black_model
+RiskMetrics EWMA volatility: https://en.wikipedia.org/wiki/Volatility_(finance)#Estimating_future_volatility
+Lusty Finance — Technical ArchitecturePage

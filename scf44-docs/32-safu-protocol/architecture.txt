@@ -1,0 +1,107 @@
+Source: https://docs.google.com/document/d/1VZytHxGZzEmJE-BsBjygN3iuEVSYbSI9345JUcKGFFo/edit?tab=t.0
+
+﻿SAFU: Technical Architecture: Community Protection Pools on Soroban
+Submission: Community-Owned Wallet Protection Pools for Stellar DeFi · Track: SCF Build Open · Target: Stellar mainnet (Soroban) · Prior art: SAFUPool v6 live on Ethereum mainnet (0xB24Aee4bd963ca9f35b27fec7FbCA678d1201480), Hashlock AI-audited, symbolically verified (Halmos 10/10), 194 tests.
+The claim/hack scanner and payout logic described below are not hypothetical: they run in production on safustaking.com. This document describes the port of that proven protocol to Soroban.
+1. What we are building on Stellar
+A community-owned wallet protection pool, built as a Soroban smart contract. Members deposit an asset (XLM at launch, with USDC coverage as a funded extension) into a shared pool to provide coverage capacity. (This is a pool deposit, not network staking: Stellar uses SCP, not proof-of-stake.) The pooled capital is put to work in established Stellar DeFi venues, and the yield it generates funds the protocol while the capital sits as coverage. If a member’s wallet is drained (phishing, approval or authorization abuse, key compromise), an off-chain deterministic fraud oracle verifies the incident and the contract streams a payout to the member’s beneficiary from the pool.
+Payouts are deterministic: the same inputs always produce the same result, with no human vote or governance step. The model is a discretionary-mutual protection pool. Members collectively fund coverage, and a signed oracle verdict triggers the payout.
+Why it matters for Stellar: stablecoin volume and new users are moving onto Stellar at pace, and most of that value sits in wallets with no recourse if they are drained. Across DeFi, less than 2% of total value locked is covered by any protection product. The few Stellar insurance efforts that exist are policy- and DAO-governance-based, where coverage is discretionary and settled by a human vote. SAFU is deterministic, oracle-driven, and wallet-drain-specific, with no governance step in the payout path. It gives Stellar users automatic recourse, secures the holdings of these incoming users, and gives foundations something concrete to offer their communities.
+2. System components
+Component
+	Tech
+	Role
+	ProtectionPool contract
+	Soroban (Rust / WASM)
+	Deposits, points accrual, coverage accounting, claim lifecycle, payout streaming, solvency enforcement
+	Yield adapter
+	Soroban → DeFindex vault → Blend
+	Routes idle pooled capital into an established Stellar yield venue (Blend lending, ~$120M TVL); the yield it generates accrues to the protocol treasury as revenue
+	Fraud oracle
+	Off-chain (Python, existing)
+	Scores a drain transaction deterministically, signs an approved claim, submits it to the contract
+	Asset layer
+	Stellar Asset Contract (SAC)
+	XLM / USDC move via token-contract transfer calls (no native payable)
+	Frontend
+	Web (existing safustaking.com, adapted)
+	Wallet connect (Freighter / Stellar wallets), deposit, claim, status
+	End-to-end flow:
+#
+	Step
+	From → To
+	What happens
+	1
+	Deposit
+	Depositor → ProtectionPool
+	Depositor deposits XLM into the pool
+	2
+	Earn yield
+	Pool → DeFindex → Blend → Pool
+	Idle capital above the claim buffer is routed into Blend lending, and the yield accrues to the protocol as revenue
+	3
+	Detect
+	Drain event → Fraud Oracle
+	Off-chain oracle scores the drain transaction deterministically and signs an approved claim
+	4
+	Verify & submit
+	Fraud Oracle → ProtectionPool
+	Signed claim submitted, and the contract verifies the oracle signature on-chain
+	5
+	Pay out
+	ProtectionPool → Beneficiary
+	Pool streams the payout over 45 days (2%/day cap, 7-day cooldown)
+	3. Soroban contract architecture
+3.1 Storage model (Stellar-specific)
+* Instance storage: global config (oracle pubkey, co-signer, treasury, pool cap, totals), small, long-lived, TTL-extended on each write.
+* Persistent storage: per-depositor DepositRecord (amount, tier, depositedAt, points, beneficiary) and per-claim Claim (entitlement, streamed, status, hackTimestamp), rent/TTL managed, bumped on access.
+* No Solidity-style mappings: keyed Map / persistent entries with explicit TTL bumping. Rent budget is accounted for in tranche scoping.
+3.2 Asset handling (Stellar-specific)
+* All value transfers use the Stellar Asset Contract token interface (transfer, balance). There is no msg.value. XLM is handled as the native SAC.
+* Coverage and payouts are denominated in the deposited asset. Absolute XLM amounts are calibrated in Tranche 1 (ratios preserved from v6). USDC-denominated coverage follows as a funded extension, reusing the same SAC interface.
+3.3 Authorization (Stellar-specific)
+* require_auth(depositor) for deposit / withdraw / setBeneficiary. Soroban’s auth framework replaces msg.sender trust.
+* Claims require an oracle signature verified on-chain (Ed25519 / contract auth). Sensitive controls (cancel / override) are 2-of-2 (oracle + co-signer), the same security model as v6.
+3.4 Core logic (ported from v6, language-adapted)
+* Tiers A / B / C set the collateral requirement. The oracle assigns tier off-chain. A higher tier posts more collateral for the same standardized coverage cap (flat, all tiers).
+* Points system: points accrue from depositedAt at increasing rates by duration. A points threshold gates claim eligibility (about 90 days at base rate). Points bank across cycles.
+* Claim window: claims must be filed within 30 days of the hack timestamp. Anti-retroactive and future-timestamp guards apply.
+* Payout streaming: linear stream over 45 days, 7-day cooldown, hard 2%/day outflow cap, pull-payment. Deposit forfeited on submission.
+* Solvency invariant: totalAllocated + entitlement ≤ totalDeposited enforced at submit time, with a dynamic stress cap on daily exposure. This is the property symbolically verified (Halmos) on v6 and re-asserted in Soroban tests.
+3.5 Yield integration: Stellar DeFi venues (Blend via DeFindex)
+Stellar has no native staking. SCP is not proof-of-stake, so there is no Lido-style liquid staking to draw on. Yield comes from Stellar DeFi lending markets.
+Idle pooled capital (above a liquidity buffer reserved for pending claims) is deployed into an established Stellar yield venue: primarily Blend, the chain’s largest lending protocol (~$120M TVL), via DeFindex, non-custodial yield infrastructure built by PaltaLabs, or by integrating Blend directly if that is simpler.
+The yield accrues to the protocol treasury as revenue and is kept separate from the payout pool (see 3.6). Depositors are not paid yield: their incentive is coverage for their own wallet plus long-term standing (points, OG status). A liquidity buffer keeps claim payouts immediately fundable (the v6 C1 “claim liquidity” property carries over: liquid balance must cover streaming transfers).
+Using DeFindex and Blend reuses vetted, traction-backed Stellar infrastructure instead of building a custom yield venue.
+3.6 Economic model (payouts, yield, revenue)
+* Payouts are funded from pooled principal, never yield. The solvency invariant (totalAllocated + entitlement ≤ totalDeposited) guarantees the pool never owes more than its deposited capital. Many depositors’ principal collectively backs each capped payout. That is the mutual model.
+* Depositor incentive is coverage plus standing (points, OG status), not yield. Capital stays liquid while it sits as coverage.
+* Revenue is the Blend yield itself, accruing to the treasury. It is taken from generated yield, never principal, so it never reduces solvency. The stream scales with pool TVL: modest at launch, growing with adoption, so it is a recurring revenue line rather than the launch business case.
+* Secondary inflow: deposits forfeited on a claim accrue to pool reserves.
+Incentives stay aligned: depositors get coverage plus standing, the protocol earns the yield as revenue, and every payout is backed by principal.
+4. Off-chain fraud oracle (existing asset, Stellar-adapted)
+* Deterministic scorer (Python, already built), encoding 125+ attack patterns and detecting wallet-drain transactions deterministically. The scoring methodology is closed-source; only signed verdicts touch the chain.
+* Stellar adaptation: ingest the Stellar/Soroban transaction format, detect drain/sweep patterns on Stellar ledgers, output a signed approval (entitlement + hackTimestamp) for the contract.
+* Trust boundary: the contract trusts only an Ed25519-signed oracle verdict; it does not run scoring on-chain. It is rate-limited (per-day claim cap) and bounded by the solvency invariant.
+5. Mapping from proven v6 (Ethereum) → Soroban
+v6 (Solidity / EVM)
+	Soroban equivalent
+	msg.value / payable
+	SAC token transfer
+	mapping(address => Struct)
+	persistent storage entries + TTL bump
+	msg.sender
+	require_auth(addr)
+	Lido + Curve yield
+	Blend lending via DeFindex vault (no native staking on Stellar)
+	ECDSA oracle sig
+	Ed25519 / Soroban contract auth
+	Foundry tests
+	Rust #[test] + Soroban test host
+	Halmos symbolic proof of solvency
+	re-assert invariant in Soroban tests + property checks
+	The economic logic and security invariants are already proven on v6. The Soroban work is a re-implementation in Rust against the soroban-sdk rather than new mechanism design, which lowers delivery risk.
+6. Open-source plan (smart contracts)
+The Soroban contract and test suite will be public on GitHub (github.com/mrkanchwala/safu-protocol), BUSL/MIT as with v6. The off-chain fraud-scoring engine remains closed-source (proprietary IP); only its on-chain verification surface (the signature check) is public, the same split as v6.
+7. Build readiness
+The team delivered SAFUPool v1 → v6 end-to-end to Ethereum mainnet: Solidity contracts, audit (Hashlock), symbolic verification (Halmos 10/10), 194 tests, frontend, and deploy automation. Murtaza leads the Soroban/Rust port, working in the soroban-sdk and reusing audited Stellar primitives (DeFindex, the Stellar Asset Contract) rather than building from scratch. Development begins immediately on award.
